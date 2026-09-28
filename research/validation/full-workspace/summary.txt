@@ -1,0 +1,113 @@
+     Summary [3277.199s] 20722 tests run: 20623 passed (54 slow, 11 flaky), 71 failed, 28 timed out, 60 skipped
+   FLAKY 2/2 [   1.019s] ( 1680/20722) codex-aws-auth network_policy_tests::real_imds_credentials_stop_after_policy_revocation
+   FLAKY 2/2 [   2.733s] ( 2851/20722) codex-app-server::all suite::v2::thread_start::config_requests_surface_cloud_config_bundle_load_errors::model_list
+   FLAKY 2/2 [  41.535s] ( 2970/20722) codex-cli::daemon_startup auto_daemon_start_attaches_to_shared_server
+   FLAKY 2/2 [  34.698s] ( 6861/20722) codex-core shell_snapshot::tests::snapshot_discovers_and_redacts_shell_initialized_credentials
+   FLAKY 2/2 [  55.997s] ( 6943/20722) codex-core shell_snapshot::tests::snapshot_discovers_and_restores_inherited_credential_aliases
+   FLAKY 2/2 [  55.402s] ( 7005/20722) codex-core tools::executed_tool_calls::request_metadata::tests::executed_tool_call_recorder_bounds_retained_history_and_keeps_latest_calls
+   FLAKY 2/2 [   1.732s] ( 8106/20722) codex-core::all suite::realtime_conversation::conversation_second_start_replaces_runtime
+   FLAKY 2/2 [   1.797s] ( 8107/20722) codex-core::all suite::realtime_conversation::conversation_start_audio_text_close_round_trip
+   FLAKY 2/2 [   5.484s] (10546/20722) codex-external-agent-migration service::tests::plugins::marketplaces::import_plugins_infers_external_official_marketplace_when_missing_from_settings
+   FLAKY 2/2 [  58.502s] (15111/20722) codex-tui app::agents_overview::tests::overview_cold_resume_honors_working_directory_selection
+   FLAKY 2/2 [  30.375s] (16458/20722) codex-tui app_server_session::tests::connected_thread_start_preserves_flex_without_catalog_support
+   TRY 2 TMT [  60.005s] ( 1945/20722) codex-cli::app_server_daemon managed_starts_ensure_one_updater_and_recover_a_missing_one
+   TRY 2 TMT [  60.004s] ( 1953/20722) codex-cli::app_server_daemon managed_identity_survives_locale_and_timezone_changes
+   TRY 2 TMT [ 120.006s] ( 2542/20722) codex-cli::app_server_daemon packaged_daemon_bootstrap_seeds_local_package
+   TRY 2 TMT [ 120.005s] ( 2543/20722) codex-cli::app_server_daemon packaged_daemon_explicit_replacement_migrates_running_legacy
+   TRY 2 TMT [ 120.007s] ( 2803/20722) codex-cli::app_server_daemon packaged_daemon_restart_seeds_local_package
+   TRY 2 TMT [  60.013s] ( 2929/20722) codex-cli::app_server_daemon restart_applies_saved_updater_preference
+   TRY 2 TMT [  60.006s] ( 2930/20722) codex-cli::app_server_daemon wall_clock_shift_keeps_server_and_updater_managed
+  TRY 2 FAIL [  11.152s] ( 2934/20722) codex-app-server::all suite::v2::turn_start_zsh_fork::turn_start_shell_zsh_fork_exec_approval_cancel_v2
+  TRY 2 FAIL [  10.361s] ( 2935/20722) codex-app-server::all suite::v2::turn_start_zsh_fork::turn_start_shell_zsh_fork_executes_command_v2
+  TRY 2 FAIL [  11.244s] ( 2939/20722) codex-app-server::all suite::v2::turn_start_zsh_fork::turn_start_shell_zsh_fork_exec_approval_v2::declined
+  TRY 2 FAIL [  11.505s] ( 2951/20722) codex-app-server::all suite::v2::turn_start_zsh_fork::turn_start_shell_zsh_fork_exec_approval_v2::launch_failure
+  TRY 2 FAIL [  10.299s] ( 2964/20722) codex-app-server::all suite::v2::turn_start_zsh_fork::turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2
+   TRY 2 TMT [ 180.021s] ( 2980/20722) codex-cli::app_server_daemon packaged_daemon_start_and_explicit_replacement
+   TRY 2 TMT [  60.008s] ( 3345/20722) codex-cli::daemon_startup incompatible_daemon_can_restart_with_confirmed_settings
+   TRY 2 TMT [  60.007s] ( 4175/20722) codex-cli::doctor_path_safety doctor_reports_failed_database_paths
+   TRY 2 TMT [  60.006s] ( 4191/20722) codex-cli::doctor_path_safety doctor_reports_only_safe_config_error_metadata
+  TRY 2 FAIL [   0.114s] ( 5909/20722) codex-core session::tests::managed_network_proxy_decider_survives_full_access_start
+   TRY 2 TMT [  60.014s] ( 6870/20722) codex-core image_preparation::tests::detail_policies_apply_the_expected_budgets
+  TRY 2 FAIL [   5.426s] ( 7797/20722) codex-core::all suite::mcp_optional_startup_grace::optional_mcp_startup_grace_controls_initial_turn_tool_catalog::custom_grace_admits_a_ready_server
+  TRY 2 FAIL [   5.394s] ( 7798/20722) codex-core::all suite::mcp_optional_startup_grace::optional_mcp_startup_grace_controls_initial_turn_tool_catalog::zero_grace_respects_server_startup_timeout
+  TRY 2 FAIL [   5.445s] ( 7799/20722) codex-core::all suite::mcp_optional_startup_grace::optional_mcp_startup_grace_controls_initial_turn_tool_catalog::zero_grace_waits_for_server_startup
+  TRY 2 FAIL [   2.104s] ( 8813/20722) codex-core::all suite::tool_parallelism::mixed_parallel_tools_run_in_parallel
+  TRY 2 FAIL [   2.141s] ( 8815/20722) codex-core::all suite::tool_parallelism::shell_tools_run_in_parallel
+  TRY 2 FAIL [   0.318s] ( 9582/20722) codex-exec::all suite::sandbox::python_getpwuid_works_under_sandbox
+  TRY 2 FAIL [   0.357s] ( 9583/20722) codex-exec::all suite::sandbox::python_multiprocessing_lock_works_under_sandbox
+  TRY 2 FAIL [   0.550s] ( 9588/20722) codex-exec::all suite::seatbelt::seatbelt_blocks_atomic_rename_exchange_and_destination_replacement
+  TRY 2 FAIL [   1.150s] ( 9871/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::confirmed_conflict_backoff_is_cancellable
+  TRY 2 FAIL [   0.990s] ( 9872/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::conflict_code_not_received
+  TRY 2 FAIL [   1.275s] ( 9873/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::delayed_error_details
+  TRY 2 FAIL [   1.053s] ( 9875/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::delayed_forbidden_details
+  TRY 2 FAIL [   0.835s] ( 9877/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::delayed_unauthorized_details
+  TRY 2 FAIL [   0.925s] ( 9878/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::different_error_code
+  TRY 2 FAIL [   0.934s] ( 9879/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::environment_deleted_stalled_body
+  TRY 2 FAIL [   0.964s] ( 9880/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::forbidden_stalled_body
+  TRY 2 FAIL [   1.033s] ( 9881/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::gateway_error
+  TRY 2 FAIL [   0.885s] ( 9882/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::malformed_success
+  TRY 2 FAIL [   0.763s] ( 9883/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::malformed_unavailable
+  TRY 2 FAIL [   1.036s] ( 9884/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::missing_conflict_code
+  TRY 2 FAIL [   0.984s] ( 9885/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::request_timeout
+  TRY 2 FAIL [   0.861s] ( 9886/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::too_many_requests
+  TRY 2 FAIL [   0.717s] ( 9888/20722) codex-exec-server remote::registration_retry::tests::registration_requires_a_confirmed_conflict_before_replay::unauthorized_stalled_body
+  TRY 2 FAIL [  10.480s] ( 9971/20722) codex-exec-server remote::direct::tests::direct_registration_handles_policy_outages_and_permanent_failures
+  TRY 2 FAIL [  10.507s] ( 9972/20722) codex-exec-server remote::direct::tests::direct_websocket_reuses_registration_and_stops_on_permanent_errors
+  TRY 2 FAIL [   9.989s] ( 9978/20722) codex-exec-server remote::noise_tests::reconnect_reuses_registration_until_url_is_rejected
+  TRY 2 FAIL [   8.969s] (10046/20722) codex-exec-server::accepted_websocket accepted_websocket_interoperates_and_recovers_with_real_direct_executor::policy_unavailable
+   TRY 2 TMT [  60.005s] (10530/20722) codex-exec::all suite::resume::exec_resume_last_respects_cwd_filter_and_all_flag
+  TRY 2 FAIL [   0.038s] (12174/20722) codex-network-proxy http_proxy::tests::http_connect_accept_blocks_hooked_host_in_full_mode_without_mitm_state
+  TRY 2 FAIL [   0.038s] (12175/20722) codex-network-proxy http_proxy::tests::http_connect_accept_blocks_in_limited_mode
+  TRY 2 FAIL [   0.034s] (12176/20722) codex-network-proxy http_proxy::tests::http_connect_accept_defers_brokered_host_mitm_until_protocol_detection
+  TRY 2 FAIL [   0.035s] (12182/20722) codex-network-proxy http_proxy::tests::http_connect_accept_passes_environment_id_to_decider
+  TRY 2 FAIL [   0.030s] (12190/20722) codex-network-proxy mitm::tests::mitm_policy_blocks_disallowed_method_and_records_telemetry
+  TRY 2 FAIL [   0.036s] (12191/20722) codex-network-proxy mitm::tests::mitm_policy_allows_matching_hooked_write_in_full_mode
+  TRY 2 FAIL [   0.040s] (12192/20722) codex-network-proxy mitm::tests::mitm_policy_blocks_encoded_path_traversal_for_repository_allowlist
+  TRY 2 FAIL [   0.033s] (12193/20722) codex-network-proxy mitm::tests::mitm_policy_blocks_hook_miss_for_hooked_host_and_records_telemetry_in_full_mode
+  TRY 2 FAIL [   0.033s] (12199/20722) codex-network-proxy mitm::tests::mitm_policy_blocks_matching_hooked_write_in_limited_mode
+  TRY 2 FAIL [   0.031s] (12220/20722) codex-network-proxy network_policy::tests::evaluate_host_policy_emits_domain_event_for_decider_ask
+  TRY 2 FAIL [   0.031s] (12221/20722) codex-network-proxy network_policy::tests::evaluate_host_policy_emits_domain_event_for_decider_allow_override
+  TRY 2 FAIL [   0.031s] (12222/20722) codex-network-proxy network_policy::tests::evaluate_host_policy_emits_execution_id_for_baseline_allow
+  TRY 2 FAIL [   0.034s] (12228/20722) codex-network-proxy network_policy::tests::policy_audit_observer_receives_domain_and_non_domain_decisions
+  TRY 2 FAIL [   0.036s] (12283/20722) codex-network-proxy runtime::tests::add_allowed_domain_removes_matching_deny_entry
+  TRY 2 FAIL [   0.035s] (12310/20722) codex-network-proxy runtime::tests::host_blocked_global_wildcard_allowlist_allows_public_hosts_except_denylist
+  TRY 2 FAIL [   0.033s] (12313/20722) codex-network-proxy runtime::tests::host_blocked_requires_allowlist_match
+  TRY 2 FAIL [   0.035s] (12316/20722) codex-network-proxy runtime::tests::host_blocked_subdomain_wildcards_exclude_apex
+  TRY 2 FAIL [   0.037s] (12342/20722) codex-network-proxy socks5::tests::handle_socks5_tcp_blocks_limited_mode_without_mitm_state
+  TRY 2 FAIL [   2.858s] (12358/20722) codex-network-proxy socks5::tests::handle_socks5_tcp_blocks_hooked_non_https_host_in_full_mode
+  TRY 2 FAIL [   3.107s] (12361/20722) codex-network-proxy socks5::tests::handle_socks5_tcp_detects_tls_for_brokered_nonstandard_port_in_full_mode
+  TRY 2 FAIL [   3.219s] (12366/20722) codex-network-proxy socks5::tests::handle_socks5_tcp_uses_mitm_for_hooked_host_in_full_mode
+  TRY 2 FAIL [   3.348s] (12371/20722) codex-network-proxy socks5::tests::handle_socks5_tcp_uses_mitm_in_limited_mode
+  TRY 2 FAIL [   2.034s] (15065/20722) codex-tui app::tests::active_reconnect::reconnect_exhaustion_and_unknown_initial_thread_stay_offline
+   TRY 2 TMT [  60.009s] (15102/20722) codex-tui app::agents_overview::tests::actions::lifecycle_removes_background_and_current_tasks_without_losing_the_dashboard
+  TRY 2 FAIL [   1.361s] (15156/20722) codex-tui app::tests::disconnect::lost_mutation_reply_preserves_work_without_resubmitting
+   TRY 2 TMT [  60.011s] (15230/20722) codex-tui app::tests::background_task_defaults_tests::command_center_new_preserves_explicit_choices_and_managed_defaults
+   TRY 2 TMT [  60.011s] (15236/20722) codex-tui app::tests::background_task_defaults_tests::command_center_new_reads_server_defaults_for_actual_destination
+   TRY 2 TMT [  60.012s] (15350/20722) codex-tui app::tests::fresh_sparkle_tests::astra_picker_confirms_the_model_at_application_after_an_automatic_update
+   TRY 2 TMT [  60.013s] (15400/20722) codex-tui app::tests::realtime_start::lifecycle_actions_stop_parked_voice_before_removing_owner
+  TRY 2 FAIL [  30.569s] (15404/20722) codex-tui app::tests::session_lifecycle_requests::local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths
+   TRY 2 TMT [  60.013s] (15415/20722) codex-tui app::tests::session_lifecycle_requests::command_center_read_only_open_requests_and_failure_preservation
+   TRY 2 TMT [  60.012s] (15417/20722) codex-tui app::tests::session_lifecycle_requests::local_mcp_respects_configured_servers_and_managed_requirements
+  TRY 2 FAIL [  22.838s] (15418/20722) codex-tui app::tests::session_lifecycle_requests::startup_defaults_tests::fresh_startup_falls_back_only_for_unsupported_config_read
+   TRY 2 TMT [  60.012s] (15427/20722) codex-tui app::tests::session_lifecycle_requests::new_session_tests::replacement_preserves_remote_launch_paths_and_older_servers
+   TRY 2 TMT [  60.011s] (15440/20722) codex-tui app::tests::session_lifecycle_requests::new_session_tests::replacement_uses_server_defaults_and_preserves_explicit_launch_settings
+  TRY 2 FAIL [  28.050s] (15449/20722) codex-tui app::tests::session_lifecycle_requests::startup_defaults_tests::startup_reads_server_defaults_before_starting_thread
+   TRY 2 TMT [  60.008s] (15576/20722) codex-tui app::tests::session_lifecycle_requests::startup_defaults_tests::fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
+   TRY 2 TMT [  60.011s] (15641/20722) codex-tui app::tests::unavailable_commands::unavailable_thread_new_and_clear_start_a_writable_session
+   TRY 2 TMT [  60.017s] (15650/20722) codex-tui app::thread_title::tests::automatic_thread_title_respects_origin_metadata_after_switching
+   TRY 2 TMT [  60.017s] (15714/20722) codex-tui app_server_session::prompt_history_tests::lifecycle_metadata_uses_local_prompt_history
+   TRY 2 TMT [  60.016s] (15747/20722) codex-tui app_server_session::reasoning_defaults_tests::embedded_reasoning_defaults_reach_responses
+   TRY 2 TMT [  60.016s] (15751/20722) codex-tui app_server_session::rollout_history::tests::cached_legacy_resume_revalidates_history_across_migration_settings
+  TRY 2 FAIL [   2.250s] (17144/20722) codex-tui chatwidget::tests::guardian::app_server_guardian_review_denied_renders_denied_request_snapshot
+  TRY 2 FAIL [   2.267s] (17145/20722) codex-tui chatwidget::tests::guardian::app_server_guardian_review_timed_out_renders_timed_out_request_snapshot
+  TRY 2 FAIL [   2.049s] (17149/20722) codex-tui chatwidget::tests::guardian::guardian_approved_request_permissions_clears_status_without_history
+  TRY 2 FAIL [   2.031s] (17154/20722) codex-tui chatwidget::tests::guardian::guardian_denied_exec_renders_warning_and_denied_request
+  TRY 2 FAIL [   2.043s] (17156/20722) codex-tui chatwidget::tests::guardian::guardian_timed_out_exec_renders_warning_and_timed_out_request
+  TRY 2 FAIL [   3.210s] (17782/20722) codex-tui chatwidget::tests::status_and_layout::running_hook_does_not_displace_active_exec_cell
+  TRY 2 FAIL [   0.142s] (18038/20722) codex-tui custom_terminal::tests::cursor::terminal_draw_omits_cursor_style_without_an_owned_glyph
+  TRY 2 FAIL [   0.195s] (18039/20722) codex-tui custom_terminal::tests::cursor::terminal_draw_repairs_owned_wide_hyperlink_after_skipped_glyphs
+  TRY 2 FAIL [   0.193s] (18040/20722) codex-tui custom_terminal::tests::cursor::terminal_draw_repairs_single_column_without_scrolling
+  TRY 2 FAIL [   0.140s] (18045/20722) codex-tui custom_terminal::tests::cursor::terminal_draw_repairs_styled_anchor_on_cursor_only_frames
+  TRY 2 FAIL [   0.054s] (20552/20722) codex-v8-poc tests::sandbox_feature_matches_linked_v8
+error: test run failed
+error: recipe `test` failed on line 88 with exit code 100
