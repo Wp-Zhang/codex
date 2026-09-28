@@ -72,6 +72,11 @@ pub(crate) fn tool_user_shell_type(
 }
 
 pub(crate) fn requested_tool_mode(turn_context: &TurnContext, model_info: &ModelInfo) -> ToolMode {
+    // Panng owns execution across model steps and exposes its finite tools directly.
+    // A model catalog preference must not hide them behind another execution loop.
+    if turn_context.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+        return ToolMode::Direct;
+    }
     model_info.tool_mode.unwrap_or_else(|| {
         if turn_context.config.features.enabled(Feature::CodeModeOnly) {
             ToolMode::CodeModeOnly

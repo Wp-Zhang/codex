@@ -166,7 +166,12 @@ async fn resume_and_compare(test: &TestCodex) -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn panng_real_commands_overlap_across_steps_then_custom_patch_changes_file()
 -> anyhow::Result<()> {
-    let harness = harness().await?;
+    let harness = TestCodexHarness::with_auto_env_builder(
+        builder().with_model_info_override("test-gpt-5.1-codex", |model| {
+            model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeModeOnly)
+        }),
+    )
+    .await?;
     harness.write_file("source.txt", b"SOURCE_BEFORE\n").await?;
     let (a, b, c, read_changed) = match test_target_os() {
         TestTargetOs::Linux | TestTargetOs::MacOs => (

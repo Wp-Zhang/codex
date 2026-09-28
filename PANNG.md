@@ -7,10 +7,10 @@ Panng keeps Codex's TUI and native command, patch, approval and hook implementat
 Extract the complete package, then run:
 
 ```sh
-./bin/codex-panng -m gpt-5.5
+./bin/codex-panng -m gpt-5.6-sol
 ```
 
-The launcher uses your existing Codex login and configuration. Use `-m` to select another model supported by your account. Resume with `./bin/codex-panng -m gpt-5.5 resume`; interrupt with Escape, then continue with another message. `/fork` creates an independent conversation from a frozen history position.
+The launcher uses your existing Codex login and configuration. Use `-m` to select another model supported by your account. Resume with `./bin/codex-panng -m gpt-5.6-sol resume`; interrupt with Escape, then continue with another message. `/fork` creates an independent conversation from a frozen history position.
 
 The Panng launcher selects the new execution mode and disables Code Mode. The unwrapped `bin/codex` remains the native entrypoint. New Panng sessions use their own history mode; existing native sessions are not rewritten.
 

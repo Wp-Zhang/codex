@@ -104,11 +104,11 @@ macOS Apple Silicon。保留整个解压目录，将它放到任意稳定位置�
 启动交互界面：
 
 ```sh
-./bin/codex-panng -m gpt-5.5
+./bin/codex-panng -m gpt-5.6-sol
 ```
 
-使用已有 Codex 登录和配置。`gpt-5.5` 是本包真实账户验证使用的模型；可以用 `-m` 选择账户支持的其他模型。
-恢复对话：`./bin/codex-panng -m gpt-5.5 resume`。运行中按 Escape 中断，再输入新请求继续。
+使用已有 Codex 登录和配置。`gpt-5.6-sol` 是本包真实账户验证使用的模型；可以用 `-m` 选择账户支持的其他模型。
+恢复对话：`./bin/codex-panng -m gpt-5.6-sol resume`。运行中按 Escape 中断，再输入新请求继续。
 退出使用 `/quit`。`./bin/codex-panng --version` 显示 fork 版本。
 
 如需独立配置与历史，先设置 `CODEX_HOME` 并运行 `./bin/codex login` 登录。

@@ -18,7 +18,7 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
-    parser.add_argument("--model", default="gpt-5.5")
+    parser.add_argument("--model", default="gpt-5.6-sol")
     parser.add_argument(
         "--tui",
         action="store_true",
@@ -83,11 +83,44 @@ def main():
                         f"turn-{index + 1}",
                     )
                     try:
-                        terminal.wait(
-                            lambda: args.model in text_only(terminal.raw),
-                            "starting authenticated TUI",
-                            timeout=180,
-                        )
+                        handled = set()
+                        for _ in range(3):
+                            terminal.wait(
+                                lambda: (
+                                    args.model.lower()
+                                    in text_only(terminal.raw).lower()
+                                    and bool(journal(home)[1])
+                                    or any(
+                                        label not in handled
+                                        and label
+                                        in "".join(
+                                            text_only(terminal.raw).lower().split()
+                                        )
+                                        for label in (
+                                            "trustandcontinue",
+                                            "useexistingmodel",
+                                        )
+                                    )
+                                ),
+                                "starting authenticated TUI",
+                                timeout=45,
+                            )
+                            screen = text_only(terminal.raw)
+                            compact = "".join(screen.lower().split())
+                            if (
+                                "useexistingmodel" in compact
+                                and "useexistingmodel" not in handled
+                            ):
+                                handled.add("useexistingmodel")
+                                os.write(terminal.master, b"\x1b[B\r")
+                            elif (
+                                "trustandcontinue" in compact
+                                and "trustandcontinue" not in handled
+                            ):
+                                handled.add("trustandcontinue")
+                                os.write(terminal.master, b"\r")
+                            else:
+                                break
                         terminal.settle()
                         terminal.submit(prompt)
                         terminal.wait(
