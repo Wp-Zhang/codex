@@ -3575,11 +3575,13 @@ name = "codex-history"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-panng-runtime",
  "codex-protocol",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -4197,9 +4199,11 @@ name = "codex-panng-runtime"
 version = "0.0.0"
 dependencies = [
  "pretty_assertions",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -4413,6 +4417,7 @@ dependencies = [
  "codex-git-utils",
  "codex-history",
  "codex-otel",
+ "codex-panng-runtime",
  "codex-protocol",
  "codex-state",
  "codex-utils-absolute-path",
