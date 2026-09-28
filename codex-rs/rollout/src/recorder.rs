@@ -2034,6 +2034,10 @@ async fn open_rollout_for_append(
     path: &Path,
     writer_lock: Option<Arc<crate::WriterLockGuard>>,
 ) -> std::io::Result<(PathBuf, tokio::fs::File, RolloutOrdinalState)> {
+    let preflight_path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || crate::strict_jsonl::preflight_native_append(&preflight_path))
+        .await
+        .map_err(IoError::other)??;
     let refresh_modified_time =
         !tokio::fs::try_exists(compression::plain_rollout_path(path)).await?;
     let path = compression::materialize_rollout_for_append(path, writer_lock.clone()).await?;

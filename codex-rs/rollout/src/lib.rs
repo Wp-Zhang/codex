@@ -23,6 +23,7 @@ pub(crate) mod search;
 mod seekable_reader;
 pub(crate) mod session_index;
 mod sqlite_metrics;
+mod strict_jsonl;
 pub mod state_db;
 mod writer_lock;
 

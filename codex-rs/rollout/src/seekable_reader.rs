@@ -39,6 +39,24 @@ impl RolloutReader {
     }
 }
 
+/// Opens a bounded-buffer stream without materializing the decoded rollout on disk.
+pub(crate) fn open_rollout_stream_reader(path: &Path) -> io::Result<Box<dyn Read + Send>> {
+    if std::fs::metadata(path).is_ok_and(|metadata| !metadata.is_file()) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "rollout is not a regular file"));
+    }
+    let source = RolloutReader::open(path)?;
+    let file = match &source {
+        RolloutReader::Plain(file) | RolloutReader::Compressed(file) => file,
+    };
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "rollout is not a regular file"));
+    }
+    match source {
+        RolloutReader::Plain(file) => Ok(Box::new(file)),
+        RolloutReader::Compressed(file) => Ok(Box::new(zstd::stream::read::Decoder::new(file)?)),
+    }
+}
+
 /// Reads at most `max_bytes` decoded rollout bytes without materializing the durable file.
 ///
 /// Returns `None` for nonregular files. This retains an open representation while reading, so
