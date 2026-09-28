@@ -3123,6 +3123,18 @@ async fn try_run_sampling_request(
         Some(turn_context.turn_timing_state.begin_tool_blocking())
     };
     drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
+    let mut outcome = outcome;
+    if let Some(pool) = turn_context.extension_data.get::<crate::panng::Pool>() {
+        if outcome.is_ok() && !cancellation_token.is_cancelled() {
+            if pool.advance(&sess, &cancellation_token).await?
+                && let Ok(result) = &mut outcome
+            {
+                result.needs_follow_up = true;
+            }
+        } else {
+            pool.stop().await?;
+        }
+    }
     drop(tool_blocking_timing_guard);
 
     if should_emit_token_count {

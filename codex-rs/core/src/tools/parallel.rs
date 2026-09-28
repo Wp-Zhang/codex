@@ -141,7 +141,20 @@ impl ToolCallRuntime {
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&step_context.turn);
         let tracker = Arc::clone(&self.tracker);
-        let lock = Arc::clone(&self.parallel_execution);
+        // Only the admitted direct probe shares a cross-step gate. Native calls,
+        // including code-mode parents and children, keep their original local gates.
+        // This prototype does not establish global exclusion for mixed real tools.
+        let prototype = matches!(
+            &source,
+            ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage
+        )
+        .then(|| step_context.turn.extension_data.get::<crate::panng::Pool>())
+        .flatten()
+        .filter(|_| call.tool_name.is_default_namespace() && call.tool_name.name == "panng_probe");
+        let lock = prototype.map_or_else(
+            || Arc::clone(&self.parallel_execution),
+            |pool| Arc::clone(&pool.execution_gate),
+        );
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
         let mut tool_call_timing_guard = ToolCallTimingGuard::capture(

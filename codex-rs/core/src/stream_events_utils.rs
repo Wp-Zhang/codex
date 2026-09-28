@@ -346,15 +346,37 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item(ctx.sess.as_ref(), ctx.step_context.as_ref(), &item)
                 .await;
 
-            let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> = Box::pin(
-                ctx.tool_runtime
-                    .clone()
-                    .handle_tool_call(call, cancellation_token),
-            );
-
+            let prototype = ctx
+                .step_context
+                .turn
+                .extension_data
+                .get::<crate::panng::Pool>()
+                .filter(|_| {
+                    call.tool_name.is_default_namespace() && call.tool_name.name == "panng_probe"
+                });
             output.needs_follow_up = true;
-            output.tool_future = Some(tool_future);
+            if let Some(pool) = prototype {
+                let cancellation_token = pool.cancellation.child_token();
+                pool.submit(
+                    call.call_id.clone(),
+                    Arc::clone(&ctx.step_context),
+                    &ctx.cancellation_token,
+                    || {
+                        Box::pin(
+                            ctx.tool_runtime
+                                .clone()
+                                .handle_tool_call(call, cancellation_token),
+                        )
+                    },
+                )
+                .await?;
+            } else {
+                output.tool_future = Some(Box::pin(
+                    ctx.tool_runtime
+                        .clone()
+                        .handle_tool_call(call, ctx.cancellation_token.child_token()),
+                ));
+            }
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {

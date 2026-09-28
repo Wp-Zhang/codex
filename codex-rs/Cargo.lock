@@ -2937,6 +2937,7 @@ dependencies = [
  "codex-models-manager",
  "codex-network-proxy",
  "codex-otel",
+ "codex-panng-runtime",
  "codex-plugin",
  "codex-prompts",
  "codex-protocol",
