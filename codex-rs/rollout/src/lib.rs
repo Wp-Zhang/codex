@@ -149,6 +149,8 @@ pub use policy::should_persist_response_item;
 pub use policy::should_persist_response_item_for_memories;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
+pub use recorder::SyncRecordError;
+pub use recorder::SyncedRecord;
 pub use recorder::append_rollout_item_to_path;
 pub use reverse_jsonl_scanner::ReverseJsonlScanner;
 pub use reverse_jsonl_scanner::ScanOutcome;

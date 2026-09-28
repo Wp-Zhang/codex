@@ -125,7 +125,15 @@ pub enum RolloutRecorderParams {
     },
 }
 
+mod synced;
+pub use synced::SyncRecordError;
+pub use synced::SyncedRecord;
+
 enum RolloutCmd {
+    AppendSynced {
+        item: Box<RolloutItem>,
+        ack: oneshot::Sender<Result<SyncedRecord, SyncRecordError>>,
+    },
     AddItems(Vec<RolloutItem>),
     Persist {
         ack: oneshot::Sender<std::io::Result<()>>,
@@ -976,6 +984,7 @@ impl RolloutRecorder {
                     rollout_path: path,
                     ordinal_state,
                     last_logged_error: None,
+                    synced: synced::SyncState::default(),
                 }
             }
             RolloutRecorderParams::Resume { path } => {
@@ -990,6 +999,7 @@ impl RolloutRecorder {
                     rollout_path: path,
                     ordinal_state,
                     last_logged_error: None,
+                    synced: synced::SyncState::default(),
                 }
             }
         };
@@ -1780,6 +1790,7 @@ struct RolloutWriterState {
     rollout_path: PathBuf,
     ordinal_state: RolloutOrdinalState,
     last_logged_error: Option<String>,
+    synced: synced::SyncState,
 }
 
 impl RolloutWriterState {
@@ -1801,6 +1812,7 @@ impl RolloutWriterState {
     }
 
     async fn flush(&mut self) -> std::io::Result<()> {
+        self.synced.ensure_writable()?;
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
         }
@@ -1808,6 +1820,7 @@ impl RolloutWriterState {
     }
 
     async fn shutdown(&mut self) -> std::io::Result<()> {
+        self.synced.ensure_writable()?;
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
         }
@@ -1889,6 +1902,7 @@ impl RolloutWriterState {
     }
 
     async fn write_pending_once(&mut self) -> std::io::Result<()> {
+        self.synced.ensure_writable()?;
         self.ensure_writer_open().await?;
         self.write_session_meta_if_needed().await?;
 
@@ -1939,6 +1953,9 @@ async fn rollout_writer(
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
+            RolloutCmd::AppendSynced { item, ack } => {
+                let _ = ack.send(state.append_synced(*item).await);
+            }
             RolloutCmd::AddItems(items) => {
                 state.add_items(items);
                 state.flush_if_materialized().await;
