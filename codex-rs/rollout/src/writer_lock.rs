@@ -26,6 +26,8 @@ pub struct WriterLockCoordinator {
 /// Keeps a thread owned until all file work has finished.
 pub struct WriterLockGuard {
     coordinator: Arc<WriterLockCoordinator>,
+    thread_id: ThreadId,
+    namespace: PathBuf,
     path: PathBuf,
     file: Option<File>,
 }
@@ -48,7 +50,10 @@ impl WriterLockCoordinator {
             warn!("failed to clean up stale thread writer locks: {err}");
         }
 
-        let path = self.directory.join(format!("{thread_id}.lock"));
+        // Resolve aliases after coordination has materialized the directory. Retain
+        // this identity on the guard so another home cannot borrow its ownership.
+        let namespace = fs::canonicalize(&self.directory)?;
+        let path = namespace.join(format!("{thread_id}.lock"));
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -80,6 +85,8 @@ impl WriterLockCoordinator {
 
         Ok(WriterLockGuard {
             coordinator: Arc::clone(self),
+            thread_id,
+            namespace,
             path,
             file: Some(file),
         })
@@ -166,6 +173,30 @@ impl WriterLockCoordinator {
                     );
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+impl WriterLockGuard {
+    /// Checks ownership before a caller opens or repairs a canonical rollout.
+    ///
+    /// This does not acquire locks or create paths. Canonicalizing the existing
+    /// namespace accepts equivalent path spellings and symlink aliases, while
+    /// rejecting a guard acquired for another thread or Codex home.
+    pub fn validate_owner(&self, codex_home: &Path, thread_id: ThreadId) -> io::Result<()> {
+        if self.thread_id != thread_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "writer guard belongs to another thread",
+            ));
+        }
+        let namespace = fs::canonicalize(codex_home.join(WRITER_LOCK_DIR))?;
+        if self.namespace != namespace {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "writer guard belongs to another Codex home",
+            ));
         }
         Ok(())
     }

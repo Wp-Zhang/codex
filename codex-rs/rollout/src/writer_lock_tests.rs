@@ -124,3 +124,86 @@ fn publication_skips_live_writers_and_keeps_coordination_locked() {
     );
     assert!(writer.acquire(thread_id).is_ok());
 }
+
+#[test]
+fn writer_guard_rejects_another_thread_or_home_without_creating_paths() {
+    let home = TempDir::new().expect("home");
+    let other_home = TempDir::new().expect("other home");
+    let thread_id = ThreadId::new();
+    let coordinator = Arc::new(WriterLockCoordinator::new(home.path()));
+    let owner = coordinator.acquire(thread_id).expect("owner");
+    owner
+        .validate_owner(home.path(), thread_id)
+        .expect("same owner");
+    assert_eq!(
+        owner
+            .validate_owner(home.path(), ThreadId::new())
+            .unwrap_err()
+            .kind(),
+        ErrorKind::InvalidInput
+    );
+    assert_eq!(
+        owner
+            .validate_owner(other_home.path(), thread_id)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NotFound
+    );
+    assert!(
+        !other_home.path().join(WRITER_LOCK_DIR).exists(),
+        "validation is read-only"
+    );
+
+    let other_coordinator = Arc::new(WriterLockCoordinator::new(other_home.path()));
+    let other_owner = other_coordinator
+        .acquire(thread_id)
+        .expect("independent namespace");
+    assert_eq!(
+        owner
+            .validate_owner(other_home.path(), thread_id)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::InvalidInput
+    );
+    assert_eq!(
+        other_owner
+            .validate_owner(home.path(), thread_id)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::InvalidInput
+    );
+}
+
+#[test]
+fn writer_guard_accepts_equivalent_existing_path_spellings() {
+    let home = TempDir::new().expect("home");
+    let child = home.path().join("child");
+    fs::create_dir(&child).expect("child");
+    let aliased_home = child.join("..").join(".");
+    let thread_id = ThreadId::new();
+    let coordinator = Arc::new(WriterLockCoordinator::new(&aliased_home));
+    let owner = coordinator.acquire(thread_id).expect("owner through alias");
+    owner
+        .validate_owner(home.path(), thread_id)
+        .expect("canonical home");
+    owner
+        .validate_owner(&aliased_home, thread_id)
+        .expect("aliased home");
+}
+
+#[cfg(unix)]
+#[test]
+fn writer_guard_accepts_symlink_alias_to_its_actual_namespace() {
+    let root = TempDir::new().expect("root");
+    let home = root.path().join("home");
+    let alias = root.path().join("alias");
+    fs::create_dir(&home).expect("home");
+    std::os::unix::fs::symlink(&home, &alias).expect("home alias");
+    let thread_id = ThreadId::new();
+    let owner = Arc::new(WriterLockCoordinator::new(&home))
+        .acquire(thread_id)
+        .expect("owner");
+    owner
+        .validate_owner(&alias, thread_id)
+        .expect("same physical namespace");
+}
