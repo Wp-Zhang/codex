@@ -36,7 +36,7 @@ def main():
         "passed": False,
     }
     with tempfile.TemporaryDirectory(prefix="panng-live-") as temp:
-        root = Path(temp)
+        root = Path(temp).resolve()
         home, workspace = root / "home", root / "workspace"
         home.mkdir()
         workspace.mkdir()
