@@ -29,6 +29,18 @@ use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+#[path = "probes_tests.rs"]
+mod probes_tests;
+
+#[cfg(test)]
+#[path = "admission_tests.rs"]
+mod admission_tests;
+
+#[cfg(test)]
+#[path = "advance_tests.rs"]
+mod advance_tests;
+
 /// Host-only experimental opt-in. Install as a turn lifecycle contributor in a mock session.
 /// Only the host-provided panng_probe test tool participates; checkpoints/recovery are tested separately in panng-runtime.
 #[derive(Default)]
