@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -46,6 +47,7 @@ def main():
             str(package),
         ],
         cwd=repo,
+        env={**os.environ, "CODEX_REPO_ROOT": str(repo)},
         check=True,
     )
     for binary in [package / "bin/codex", package / "bin/codex-code-mode-host"]:
