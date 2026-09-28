@@ -85,6 +85,7 @@ use codex_utils_path as path_utils;
 #[derive(Clone)]
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
+    mode: RecorderMode,
     writer_task: Arc<RolloutWriterTask>,
     pub(crate) rollout_path: PathBuf,
 }
@@ -125,11 +126,27 @@ pub enum RolloutRecorderParams {
     },
 }
 
+mod strict;
+pub use strict::ReconciledAppend;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecorderMode {
+    Native,
+    Strict,
+}
+
 mod synced;
 pub use synced::SyncRecordError;
 pub use synced::SyncedRecord;
 
 enum RolloutCmd {
+    AppendPanng {
+        commit: Box<codex_history::PanngCommit>,
+        ack: oneshot::Sender<Result<SyncedRecord, SyncRecordError>>,
+    },
+    ReconcilePanng {
+        commit: Box<codex_history::PanngCommit>,
+        ack: oneshot::Sender<Result<ReconciledAppend, SyncRecordError>>,
+    },
     AppendSynced {
         item: Box<RolloutItem>,
         ack: oneshot::Sender<Result<SyncedRecord, SyncRecordError>>,
@@ -985,6 +1002,7 @@ impl RolloutRecorder {
                     ordinal_state,
                     last_logged_error: None,
                     synced: synced::SyncState::default(),
+                    strict: None,
                 }
             }
             RolloutRecorderParams::Resume { path } => {
@@ -1000,9 +1018,18 @@ impl RolloutRecorder {
                     ordinal_state,
                     last_logged_error: None,
                     synced: synced::SyncState::default(),
+                    strict: None,
                 }
             }
         };
+        Ok(Self::start_writer(state, writer_lock, RecorderMode::Native))
+    }
+
+    fn start_writer(
+        state: RolloutWriterState,
+        writer_lock: Option<Arc<crate::WriterLockGuard>>,
+        mode: RecorderMode,
+    ) -> Self {
         let rollout_path = state.rollout_path.clone();
 
         // A reasonably-sized bounded channel. If the buffer fills up the send
@@ -1031,11 +1058,12 @@ impl RolloutRecorder {
         });
         writer_task.set_handle(handle);
 
-        Ok(Self {
+        Self {
             tx,
+            mode,
             writer_task,
             rollout_path,
-        })
+        }
     }
 
     pub fn rollout_path(&self) -> &Path {
@@ -1043,6 +1071,11 @@ impl RolloutRecorder {
     }
 
     pub async fn record_canonical_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
+        if self.mode == RecorderMode::Strict {
+            return Err(IoError::other(
+                "strict recorder requires identified Panng commits",
+            ));
+        }
         if items.is_empty() {
             return Ok(());
         }
@@ -1791,6 +1824,7 @@ struct RolloutWriterState {
     ordinal_state: RolloutOrdinalState,
     last_logged_error: Option<String>,
     synced: synced::SyncState,
+    strict: Option<strict::StrictState>,
 }
 
 impl RolloutWriterState {
@@ -1808,10 +1842,16 @@ impl RolloutWriterState {
     }
 
     async fn persist(&mut self) -> std::io::Result<()> {
+        if let Some(strict) = &self.strict {
+            return strict.barrier();
+        }
         self.write_pending_with_recovery("persist").await
     }
 
     async fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(strict) = &self.strict {
+            return strict.barrier();
+        }
         self.synced.ensure_writable()?;
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
@@ -1820,6 +1860,9 @@ impl RolloutWriterState {
     }
 
     async fn shutdown(&mut self) -> std::io::Result<()> {
+        if let Some(strict) = &self.strict {
+            return strict.barrier();
+        }
         self.synced.ensure_writable()?;
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
@@ -1953,10 +1996,19 @@ async fn rollout_writer(
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
+            RolloutCmd::AppendPanng { commit, ack } => {
+                let _ = ack.send(state.append_panng(*commit).await);
+            }
+            RolloutCmd::ReconcilePanng { commit, ack } => {
+                let _ = ack.send(state.reconcile_panng(*commit).await);
+            }
             RolloutCmd::AppendSynced { item, ack } => {
                 let _ = ack.send(state.append_synced(*item).await);
             }
             RolloutCmd::AddItems(items) => {
+                if state.strict.is_some() {
+                    return Err(IoError::other("native append reached strict writer"));
+                }
                 state.add_items(items);
                 state.flush_if_materialized().await;
             }
@@ -2035,9 +2087,11 @@ async fn open_rollout_for_append(
     writer_lock: Option<Arc<crate::WriterLockGuard>>,
 ) -> std::io::Result<(PathBuf, tokio::fs::File, RolloutOrdinalState)> {
     let preflight_path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || crate::strict_jsonl::preflight_native_append(&preflight_path))
-        .await
-        .map_err(IoError::other)??;
+    tokio::task::spawn_blocking(move || {
+        crate::strict_jsonl::preflight_native_append(&preflight_path)
+    })
+    .await
+    .map_err(IoError::other)??;
     let refresh_modified_time =
         !tokio::fs::try_exists(compression::plain_rollout_path(path)).await?;
     let path = compression::materialize_rollout_for_append(path, writer_lock.clone()).await?;

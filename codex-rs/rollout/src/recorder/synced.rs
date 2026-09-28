@@ -95,6 +95,11 @@ impl RolloutRecorder {
     /// writes, to prevent appending behind a partial record. Reconciliation is not provided here.
     /// Cancellation after enqueueing may commit the record without delivering its receipt.
     pub async fn append_synced(&self, item: RolloutItem) -> Result<SyncedRecord, SyncRecordError> {
+        if self.mode == super::RecorderMode::Strict {
+            return Err(SyncRecordError::DefinitelyRejected(io::Error::other(
+                "strict recorder requires identified Panng commits",
+            )));
+        }
         if self.writer_task._writer_lock.is_none() {
             return Err(SyncRecordError::DefinitelyRejected(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -120,6 +125,11 @@ impl RolloutWriterState {
         &mut self,
         item: RolloutItem,
     ) -> Result<SyncedRecord, SyncRecordError> {
+        if self.strict.is_some() {
+            return Err(SyncRecordError::DefinitelyRejected(io::Error::other(
+                "generic synced append reached strict writer",
+            )));
+        }
         if !cfg!(unix) {
             return Err(SyncRecordError::DefinitelyRejected(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -218,7 +228,7 @@ impl RolloutWriterState {
     }
 }
 
-fn sync_ancestors(path: &Path) -> io::Result<()> {
+pub(super) fn sync_ancestors(path: &Path) -> io::Result<()> {
     // Sync bottom-up through the existing root too: native deferred creation may have created
     // several parents before this command, and their creation history is not retained.
     let parent = path

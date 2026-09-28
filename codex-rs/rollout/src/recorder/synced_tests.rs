@@ -14,6 +14,7 @@ fn state(path: std::path::PathBuf) -> RolloutWriterState {
         ordinal_state: RolloutOrdinalState::Paginated { next: Some(7) },
         last_logged_error: None,
         synced: SyncState::default(),
+        strict: None,
     }
 }
 
@@ -168,6 +169,7 @@ async fn lost_receipt_does_not_reexecute_and_closed_channel_rejects() {
     );
     let recorder = RolloutRecorder {
         tx,
+        mode: super::super::RecorderMode::Native,
         writer_task: std::sync::Arc::new(super::super::RolloutWriterTask::new(Some(guard))),
         rollout_path: directory.path().join("unused.jsonl"),
     };

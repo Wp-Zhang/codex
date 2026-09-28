@@ -960,6 +960,7 @@ async fn writer_state_retries_write_error_before_reporting_flush_success() -> st
         ordinal_state: RolloutOrdinalState::Legacy,
         last_logged_error: None,
         synced: Default::default(),
+        strict: None,
     };
     state.add_items(vec![RolloutItem::EventMsg(EventMsg::AgentMessage(
         AgentMessageEvent {
