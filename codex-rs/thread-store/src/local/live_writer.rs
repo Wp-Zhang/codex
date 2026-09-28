@@ -142,6 +142,70 @@ pub(super) async fn append_items(
     .await
 }
 
+/// Keep canonical acknowledgement independent of rebuildable SQLite metadata.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(super) async fn append_synced_record(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    item: RolloutItem,
+) -> ThreadStoreResult<crate::DurableRecordPosition> {
+    if !cfg!(unix) {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "append_synced_record",
+        });
+    }
+    let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
+    let (recorder, rollout_id, history_mode) = live_writer_parts(store, thread_id).await?;
+    // Legacy rollouts have no canonical ordinals; never fabricate a paginated cut.
+    if history_mode != ThreadHistoryMode::Paginated {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "append_synced_record_legacy",
+        });
+    }
+    if !is_persisted_rollout_item(&item, history_mode) {
+        return Err(ThreadStoreError::SyncedRecord {
+            source: codex_rollout::SyncRecordError::DefinitelyRejected(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "record is excluded by the persistence policy",
+            )),
+        });
+    }
+    let record = recorder
+        .append_synced(item)
+        .await
+        .map_err(|source| ThreadStoreError::SyncedRecord { source })?;
+    let end_ordinal_exclusive = record
+        .ordinal
+        .and_then(|ordinal| ordinal.checked_add(1))
+        .ok_or_else(|| ThreadStoreError::SyncedRecord {
+            source: codex_rollout::SyncRecordError::Uncertain(std::io::Error::other(
+                "synchronized paginated record has no valid exclusive ordinal",
+            )),
+        })?;
+    let receipt = crate::DurableRecordPosition {
+        end: codex_protocol::protocol::HistoryPosition {
+            thread_id: rollout_id,
+            end_ordinal_exclusive,
+            end_byte_offset: record.end_byte_offset,
+        },
+    };
+    if let Err(err) = super::thread_history_materialization::materialize_to_sqlite(
+        store,
+        rollout_id,
+        recorder.rollout_path(),
+    )
+    .await
+    {
+        warn!("failed to project synchronized rollout for {thread_id}: {err}");
+    }
+    if let Err(err) =
+        sync_materialized_rollout_path(store, thread_id, recorder.rollout_path()).await
+    {
+        warn!("failed to project synchronized rollout path for {thread_id}: {err}");
+    }
+    Ok(receipt)
+}
+
 pub(super) async fn persist_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,

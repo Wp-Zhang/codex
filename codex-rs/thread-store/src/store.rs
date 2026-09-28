@@ -147,6 +147,29 @@ pub trait ThreadStore: Any + Send + Sync {
     /// replay history and before updating any implementation-owned projections.
     fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreFuture<'_, ()>;
 
+    /// Reports only single-record synchronization, not complete Panng runtime support.
+    fn single_record_sync_capability(&self) -> crate::SingleRecordSyncCapability {
+        crate::SingleRecordSyncCapability::Unsupported
+    }
+
+    /// Appends one canonical record and acknowledges its synchronized exclusive cut.
+    ///
+    /// Implementations must preserve typed uncertainty and must not turn a successful
+    /// canonical acknowledgement into an error because a rebuildable projection failed.
+    /// Cancellation after acceptance may leave the outcome unknown; callers must not retry
+    /// blindly. This primitive provides neither idempotency nor reconciliation.
+    fn append_synced_record(
+        &self,
+        _thread_id: ThreadId,
+        _item: codex_rollout::RolloutItem,
+    ) -> ThreadStoreFuture<'_, crate::DurableRecordPosition> {
+        Box::pin(async {
+            Err(crate::ThreadStoreError::Unsupported {
+                operation: "append_synced_record",
+            })
+        })
+    }
+
     /// Records metadata derived from rollout items.
     /// Unlike [`Self::update_thread_metadata`], this allows the write to be deferred.
     ///

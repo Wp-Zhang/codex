@@ -11,6 +11,7 @@ mod local;
 mod projects;
 mod queue_store;
 mod store;
+mod synced_record;
 mod thread_attachments;
 mod thread_metadata_sync;
 mod thread_sections;
@@ -113,3 +114,6 @@ pub use types::ThreadSortKey;
 pub use types::TimelinePage;
 pub use types::TurnPage;
 pub use types::UpdateThreadMetadataParams;
+
+pub use synced_record::DurableRecordPosition;
+pub use synced_record::SingleRecordSyncCapability;

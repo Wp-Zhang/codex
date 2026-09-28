@@ -12,6 +12,9 @@ mod projects;
 mod read_thread;
 mod revert_thread;
 mod rollout_migration;
+#[cfg(test)]
+#[path = "synced_record_tests.rs"]
+mod synced_record_tests;
 // This lands before the reader PRs that consume the shared lineage resolver.
 #[allow(dead_code)]
 mod rollout_lineage;
@@ -529,6 +532,22 @@ impl ThreadStore for LocalThreadStore {
 
     fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move { live_writer::append_items(self, params).await })
+    }
+
+    fn single_record_sync_capability(&self) -> crate::SingleRecordSyncCapability {
+        if cfg!(unix) {
+            crate::SingleRecordSyncCapability::SingleRecordSyncV1
+        } else {
+            crate::SingleRecordSyncCapability::Unsupported
+        }
+    }
+
+    fn append_synced_record(
+        &self,
+        thread_id: ThreadId,
+        item: codex_rollout::RolloutItem,
+    ) -> ThreadStoreFuture<'_, crate::DurableRecordPosition> {
+        Box::pin(async move { live_writer::append_synced_record(self, thread_id, item).await })
     }
 
     fn persist_thread(

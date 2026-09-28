@@ -261,6 +261,42 @@ impl LiveThread {
         Ok(())
     }
 
+    /// Synchronizes one canonical record; metadata projection cannot invalidate its ACK.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn append_synced_record(
+        &self,
+        item: RolloutItem,
+    ) -> ThreadStoreResult<crate::DurableRecordPosition> {
+        let receipt = self
+            .thread_store
+            .append_synced_record(self.thread_id, item.clone())
+            .await?;
+        let update = self
+            .metadata_sync
+            .lock()
+            .await
+            .observe_appended_items(&[item]);
+        if let Some(update) = update {
+            let result = self
+                .thread_store
+                .record_thread_metadata(UpdateThreadMetadataParams {
+                    thread_id: self.thread_id,
+                    patch: update.patch.clone(),
+                    include_archived: true,
+                })
+                .await;
+            match result {
+                Ok(()) => self
+                    .metadata_sync
+                    .lock()
+                    .await
+                    .mark_pending_update_applied(&update),
+                Err(err) => warn!("failed to project metadata after canonical sync: {err}"),
+            }
+        }
+        Ok(receipt)
+    }
+
     async fn persist_appended_items(
         &self,
         raw_items: &[RolloutItem],

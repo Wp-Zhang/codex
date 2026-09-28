@@ -18,6 +18,13 @@ pub(crate) fn reject_paginated_history_mode(
 /// Error type shared by thread-store implementations.
 #[derive(Debug, thiserror::Error)]
 pub enum ThreadStoreError {
+    /// A canonical sync append was rejected or its durable outcome is uncertain.
+    #[error("canonical record sync failed: {source}")]
+    SyncedRecord {
+        #[source]
+        source: codex_rollout::SyncRecordError,
+    },
+
     /// The requested thread does not exist in this store.
     #[error("thread {thread_id} not found")]
     ThreadNotFound {
