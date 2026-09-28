@@ -242,3 +242,6 @@ fn uncertain(message: impl Into<String>) -> SyncRecordError {
     SyncRecordError::Uncertain(io::Error::other(message.into()))
 }
 
+#[cfg(test)]
+#[path = "strict_tests.rs"]
+mod tests;
