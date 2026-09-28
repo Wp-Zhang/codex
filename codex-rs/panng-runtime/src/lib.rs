@@ -19,8 +19,12 @@ mod checkpoint_tests;
 #[path = "machine_tests.rs"]
 mod machine_tests;
 
+mod journal;
 mod journal_ids;
 mod journal_types;
+pub use journal::RuntimeMutation;
+pub use journal::RuntimeSnapshot;
+pub use journal::SnapshotReason;
 pub use journal_ids::BoundedJson;
 pub use journal_ids::BranchId;
 pub use journal_ids::CallId;
@@ -43,3 +47,6 @@ pub use journal_types::OperationState;
 pub use journal_types::ResultEncoding;
 pub use journal_types::StoredResult;
 pub use journal_types::UnknownResultReason;
+#[cfg(test)]
+#[path = "journal_tests.rs"]
+mod journal_tests;
