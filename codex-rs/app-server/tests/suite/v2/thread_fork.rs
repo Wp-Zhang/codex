@@ -2347,6 +2347,7 @@ async fn assert_thread_fork_ephemeral_remains_pathless_and_omits_listing(
     let create_rollout = match history_mode {
         ThreadHistoryMode::Legacy => create_fake_rollout,
         ThreadHistoryMode::Paginated => create_fake_paginated_rollout,
+        ThreadHistoryMode::PanngV1 => anyhow::bail!("Panng fixtures require strict initialization"),
     };
     let conversation_id = create_rollout(
         codex_home.path(),

@@ -45,6 +45,11 @@ pub enum TurnInput {
     // through the in-memory queue.
     ResponseItem(#[serde(with = "turn_input_response_item")] ResponseItemEnvelope),
     InterAgentCommunication(InterAgentCommunication),
+    /// Panng keeps keyed context unmerged until the accepted input's durable commit.
+    #[serde(skip)]
+    AdditionalContext(
+        std::collections::BTreeMap<String, codex_protocol::protocol::AdditionalContextEntry>,
+    ),
 }
 
 mod turn_input_response_item {

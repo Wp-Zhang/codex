@@ -19,6 +19,8 @@ pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) -> 
             }
             ThreadStoreError::ThreadNotFound { .. }
             | ThreadStoreError::InvalidRequest { .. }
+            // Both preserve their nested I/O source for the classification pass below.
+            | ThreadStoreError::PanngCreate { .. }
             | ThreadStoreError::SyncedRecord { .. }
             | ThreadStoreError::Internal { .. } => {}
         }

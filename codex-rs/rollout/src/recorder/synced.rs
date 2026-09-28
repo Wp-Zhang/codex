@@ -228,7 +228,7 @@ impl RolloutWriterState {
     }
 }
 
-pub(super) fn sync_ancestors(path: &Path) -> io::Result<()> {
+pub(crate) fn sync_ancestors(path: &Path) -> io::Result<()> {
     // Sync bottom-up through the existing root too: native deferred creation may have created
     // several parents before this command, and their creation history is not retained.
     let parent = path

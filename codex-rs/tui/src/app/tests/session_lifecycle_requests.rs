@@ -643,6 +643,11 @@ fn create_history_rollout(
     let create_rollout = match history_mode {
         ThreadHistoryMode::Legacy => create_fake_rollout,
         ThreadHistoryMode::Paginated => create_fake_paginated_rollout,
+        ThreadHistoryMode::PanngV1 => {
+            return Err(color_eyre::eyre::eyre!(
+                "Panng fixtures require strict initialization"
+            ));
+        }
     };
     let thread_id = create_rollout(
         config.codex_home.as_path(),

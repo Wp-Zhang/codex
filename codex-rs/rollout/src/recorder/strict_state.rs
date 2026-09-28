@@ -4,6 +4,23 @@ use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 
 impl StrictState {
+    pub(in crate::recorder) fn fresh(
+        recovered: &RecoveredPanngSuffix,
+        initial: &PanngCommit,
+    ) -> io::Result<Self> {
+        let mut state = Self::recovered(recovered)?;
+        state.needs_resume_fence = false;
+        state.last = Some(LastCommit {
+            id: initial.commit_id().clone(),
+            payload: initial.canonical_bytes()?,
+            receipt: SyncedRecord {
+                ordinal: Some(state.ordinal),
+                end_byte_offset: state.end,
+            },
+        });
+        Ok(state)
+    }
+
     pub(super) fn recovered(recovered: &RecoveredPanngSuffix) -> io::Result<Self> {
         let last = recovered
             .commits
@@ -39,6 +56,16 @@ impl StrictState {
         }
         Ok(())
     }
+    pub(super) fn durable_position(&self) -> io::Result<SyncedRecord> {
+        self.barrier()?;
+        // Recovered state is installed only after strict reopen's file/directory sync.
+        // `last` remains unset on cold open: this cut grants no same-attempt retry authority.
+        Ok(SyncedRecord {
+            ordinal: Some(self.ordinal),
+            end_byte_offset: self.end,
+        })
+    }
+
     fn fault(&mut self, stage: WriteStage) -> io::Result<()> {
         #[cfg(test)]
         if self.fault == Some(stage) {
@@ -102,7 +129,7 @@ impl StrictState {
         {
             return Err(rejected("cold writer requires a new epoch ResumeFence"));
         }
-        crate::panng_recovery::validate_thread_settings(&commit, self.thread_id)
+        crate::panng_recovery::validate_host_ownership(&commit, self.thread_id)
             .map_err(SyncRecordError::DefinitelyRejected)?;
         let candidate = commit
             .mutation()

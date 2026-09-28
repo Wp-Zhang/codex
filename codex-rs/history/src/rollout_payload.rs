@@ -22,6 +22,9 @@ use serde::Serialize;
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum RolloutItemWire<'a> {
+    PanngCommit {
+        payload: Cow<'a, Box<crate::PanngCommit>>,
+    },
     SessionMeta {
         payload: Cow<'a, SessionMetaLine>,
     },
@@ -65,6 +68,9 @@ pub(super) enum RolloutItemWire<'a> {
 impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
     fn from(item: &'a RolloutItem) -> Self {
         match item {
+            RolloutItem::PanngCommit(payload) => Self::PanngCommit {
+                payload: Cow::Borrowed(payload),
+            },
             RolloutItem::SessionMeta(payload) => Self::SessionMeta {
                 payload: Cow::Borrowed(payload),
             },
@@ -113,6 +119,7 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
 impl From<RolloutItemWire<'_>> for RolloutItem {
     fn from(item: RolloutItemWire<'_>) -> Self {
         match item {
+            RolloutItemWire::PanngCommit { payload } => Self::PanngCommit(payload.into_owned()),
             RolloutItemWire::SessionMeta { payload } => Self::SessionMeta(payload.into_owned()),
             RolloutItemWire::ResponseItem { payload, metadata } => {
                 Self::ResponseItem(ResponseItemEnvelope {

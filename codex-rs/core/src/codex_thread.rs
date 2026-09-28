@@ -406,6 +406,7 @@ impl CodexThread {
         &self,
         request: RecoverTurnRequest,
     ) -> CodexResult<StartIfIdleSubmission> {
+        crate::session::panng_bootstrap::reject_live_execution(&self.session)?;
         self.ensure_execution_capacity_for_turn_start(self.session.services.agent_control.as_ref())
             .await?;
         let RecoverTurnRequest {
@@ -509,6 +510,7 @@ impl CodexThread {
         request: TurnInputRequest,
         mode: TurnInputMode,
     ) -> CodexResult<TurnInputSubmission> {
+        // Panng turn scope is validated by the serialized input handler before any mutation.
         if !matches!(mode, TurnInputMode::Steer { .. }) {
             self.ensure_execution_capacity_for_turn_start(
                 self.session.services.agent_control.as_ref(),
@@ -520,6 +522,7 @@ impl CodexThread {
 
     /// Persist whether this thread is eligible for future memory generation.
     pub async fn set_thread_memory_mode(&self, mode: ThreadMemoryMode) -> anyhow::Result<()> {
+        crate::session::panng_bootstrap::reject_live_execution(&self.session)?;
         self.session.set_thread_memory_mode(mode).await
     }
 
@@ -717,11 +720,16 @@ impl CodexThread {
     }
 
     /// Records a context fragment without creating a new user turn boundary.
-    pub(crate) async fn inject_fragment_without_turn(&self, fragment: impl ContextualUserFragment) {
+    pub(crate) async fn inject_fragment_without_turn(
+        &self,
+        fragment: impl ContextualUserFragment,
+    ) -> CodexResult<()> {
+        crate::session::panng_bootstrap::reject_live_execution(&self.session)?;
         let item = ContextualUserFragment::into(fragment);
         self.session
             .inject_no_new_turn(vec![item], /*current_turn_context*/ None)
             .await;
+        Ok(())
     }
 
     /// Records an explicit user goal mutation without scheduling a model response.
@@ -729,6 +737,7 @@ impl CodexThread {
         &self,
         update: crate::context::UserGoalUpdate,
     ) -> CodexResult<()> {
+        crate::session::panng_bootstrap::reject_live_execution(&self.session)?;
         self.session.record_user_goal_update(update).await;
         self.checkpoint_preparation().await?;
         Ok(())
@@ -750,6 +759,7 @@ impl CodexThread {
         &self,
         items: Vec<ResponseItem>,
     ) -> CodexResult<()> {
+        crate::session::panng_bootstrap::reject_live_execution(&self.session)?;
         if items.is_empty() {
             return Err(CodexErr::InvalidRequest(
                 "items must not be empty".to_string(),
@@ -1076,6 +1086,7 @@ impl CodexThread {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        crate::session::panng_bootstrap::reject_live_execution(&self.session)?;
         self.session.refresh_mcp_if_dirty().await;
         self.session
             .services

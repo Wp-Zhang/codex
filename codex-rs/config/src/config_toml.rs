@@ -363,6 +363,9 @@ pub struct ConfigToml {
     #[serde(default = "default_history")]
     pub history: Option<History>,
 
+    /// Opt new CLI/TUI threads into the experimental Panng execution engine.
+    pub experimental_panng: Option<bool>,
+
     /// Directory where Codex stores the SQLite state DB.
     /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`.
     pub sqlite_home: Option<AbsolutePathBuf>,

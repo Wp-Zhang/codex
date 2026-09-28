@@ -52,6 +52,11 @@ async fn materialize_to_sqlite_with_state_db(
         .await
         .map_err(thread_store_io_error)?
         .meta;
+    if session_meta.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "panng_requires_strict_ack_projection",
+        });
+    }
     let initial_ordinal = session_meta
         .history_base
         .map_or(0, |base| base.end_ordinal_exclusive);
@@ -220,10 +225,16 @@ async fn read_projection_steps(
         }
         let is_inherited_subagent_history =
             subagent_history_start_ordinal.is_some_and(|start| ordinal < start);
+        let projected =
+            project_rollout_line(&line).map_err(|error| ThreadStoreError::Internal {
+                message: format!(
+                    "invalid rollout projection for {thread_id} at ordinal {ordinal}: {error}"
+                ),
+            })?;
         let changes = if is_inherited_subagent_history {
             ThreadHistoryChangeSet::default()
         } else {
-            project_rollout_line(&line)
+            projected
         };
         let fallback_created_at_ms = if changes
             .changed_items

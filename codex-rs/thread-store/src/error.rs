@@ -18,6 +18,12 @@ pub(crate) fn reject_paginated_history_mode(
 /// Error type shared by thread-store implementations.
 #[derive(Debug, thiserror::Error)]
 pub enum ThreadStoreError {
+    /// Strict creation preserves its stable target and typed durability outcome.
+    #[error("Panng initialization failed: {source}")]
+    PanngCreate {
+        #[source]
+        source: codex_rollout::PanngCreateError,
+    },
     /// A canonical sync append was rejected or its durable outcome is uncertain.
     #[error("canonical record sync failed: {source}")]
     SyncedRecord {

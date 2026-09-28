@@ -167,6 +167,7 @@ LEFT JOIN thread_items AS final_agent
                         Vec::new()
                     };
                     let mut turn = stored_turn_row(row)?;
+                    turn.position.rollout_id = segment_cursor_identity(lineage, segment);
                     turn.summary_items = summary_items;
                     Ok(turn)
                 })
@@ -276,14 +277,15 @@ pub(super) async fn page_item_rows(
                 .await
                 .map_err(thread_history_error)?
             {
-                anchor = Some(ordinal);
+                anchor = Some((ordinal, segment_cursor_identity(lineage, segment)));
                 break;
             }
         }
+        let (ordinal, rollout_id) = anchor.ok_or_else(invalid_item_anchor)?;
         Some(HistoryCursor {
             requested_thread_id: params.thread_id,
-            rollout_ordinal: u64::try_from(anchor.ok_or_else(invalid_item_anchor)?)
-                .map_err(thread_history_error)?,
+            rollout_id,
+            rollout_ordinal: u64::try_from(ordinal).map_err(thread_history_error)?,
             include_anchor: false,
             scope: CursorScope::ItemsByCreatedAtOrdinal,
         })
@@ -328,7 +330,11 @@ WHERE thread_id =
                 .await
                 .map_err(thread_history_error)?
                 .into_iter()
-                .map(stored_thread_item_row)
+                .map(|row| {
+                    let mut row = stored_thread_item_row(row)?;
+                    row.position.rollout_id = segment_cursor_identity(lineage, segment);
+                    Ok(row)
+                })
                 .collect::<ThreadStoreResult<Vec<_>>>()?,
         );
     }
@@ -404,6 +410,18 @@ WHERE thread_id =
     )
 }
 
+// Native lineages have disjoint ordinal ranges. Panng fork segments restart at one.
+fn segment_cursor_identity(
+    lineage: &RolloutLineage,
+    segment: &RolloutLineageSegment,
+) -> Option<ThreadId> {
+    lineage
+        .segments()
+        .windows(2)
+        .any(|pair| pair[1].start_ordinal() <= pair[0].end_ordinal().unwrap_or(u64::MAX))
+        .then_some(segment.rollout_id())
+}
+
 fn segments_from_cursor<'a>(
     lineage: &'a RolloutLineage,
     direction: SortDirection,
@@ -412,9 +430,25 @@ fn segments_from_cursor<'a>(
     let segments = lineage.segments();
     let cursor_index = cursor
         .map(|cursor| {
-            lineage
-                .segment_index_for_ordinal(cursor.rollout_ordinal)
-                .ok_or_else(|| invalid_cursor("position outside thread lineage"))
+            match cursor.rollout_id {
+                Some(id) => lineage.segments().iter().position(|segment| {
+                    segment.rollout_id() == id
+                        && cursor.rollout_ordinal >= segment.start_ordinal()
+                        && segment
+                            .end_ordinal()
+                            .is_none_or(|end| cursor.rollout_ordinal < end)
+                }),
+                None if lineage.segments().windows(2).any(|pair| {
+                    pair[1].start_ordinal() <= pair[0].end_ordinal().unwrap_or(u64::MAX)
+                }) =>
+                {
+                    None
+                }
+                None => lineage.segment_index_for_ordinal(cursor.rollout_ordinal),
+            }
+            .ok_or_else(|| {
+                invalid_cursor("position outside thread lineage or missing segment identity")
+            })
         })
         .transpose()?;
     let indexes: Vec<usize> = match direction {
@@ -509,6 +543,7 @@ fn finish_page<T: HasPosition>(
                 scope.clone(),
                 row.position().rollout_ordinal,
                 /*include_anchor*/ true,
+                row.position().rollout_id,
             )
         })
         .transpose()?;
@@ -520,6 +555,7 @@ fn finish_page<T: HasPosition>(
                     scope,
                     row.position().rollout_ordinal,
                     /*include_anchor*/ false,
+                    row.position().rollout_id,
                 )
             })
             .transpose()?

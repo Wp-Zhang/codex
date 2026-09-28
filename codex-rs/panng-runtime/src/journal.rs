@@ -13,6 +13,8 @@ pub enum SnapshotReason {
     ReplayBound,
     Fork,
     ResumeFence,
+    /// Close a fully delivered execution window; old readers reject this capability.
+    RetireDelivered,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -203,6 +205,11 @@ impl RuntimeMutation {
                 }
             }
             Self::Snapshot { state, reason } => {
+                if *reason == SnapshotReason::RetireDelivered && !state.operations().is_empty() {
+                    return Err(JournalError(
+                        "retirement checkpoint must have no active operations",
+                    ));
+                }
                 if *reason == SnapshotReason::Initial && !state.operations().is_empty() {
                     return Err(JournalError("initial checkpoint must be empty"));
                 }
@@ -225,8 +232,9 @@ impl RuntimeMutation {
     }
 
     /// Validates against the prior branch checkpoint and returns a candidate without mutating it.
-    /// The host must commit that candidate before publication or execution. Snapshot pruning is
-    /// deliberately unsupported until the host can prove retained summaries and deduplication.
+    /// The host must commit that candidate before publication or execution. Only an explicit
+    /// RetireDelivered checkpoint may remove operations, after all delivery is complete.
+    /// Hosts must fence admission by the captured epoch and preserve historical result lookup.
     pub fn apply(
         &self,
         branch: &BranchId,
@@ -303,6 +311,20 @@ impl RuntimeMutation {
                         if branch != old_branch || state != old {
                             return Err(JournalError(
                                 "checkpoint cannot rewrite or prune runtime state",
+                            ));
+                        }
+                    }
+                    SnapshotReason::RetireDelivered => {
+                        if branch != old_branch
+                            || state.execution_epoch() == old.execution_epoch()
+                            || !state.operations().is_empty()
+                            || old.operations().iter().any(|(_, operation)| {
+                                !matches!(operation.state(), OperationState::InContext { .. })
+                                    || &operation.identity().owner_epoch == state.execution_epoch()
+                            })
+                        {
+                            return Err(JournalError(
+                                "retirement requires a fresh same-branch epoch after all delivery",
                             ));
                         }
                     }
@@ -394,3 +416,7 @@ fn changes<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<OperationChange>, D::Error> {
     bounded_vec::<D, _, 32>(deserializer)
 }
+
+#[cfg(test)]
+#[path = "retire_delivered_tests.rs"]
+mod retire_delivered_tests;

@@ -133,7 +133,7 @@ impl RollbackPlanner {
 
     pub(super) fn observe(&mut self, line: &RolloutLine) -> ThreadStoreResult<()> {
         let index = self.record_boundaries.len();
-        self.model_replay.observe(index, &line.item);
+        self.model_replay.observe(index, &line.item)?;
         self.record_boundaries
             .push(self.boundary_stack.last().copied());
         let paired_user_boundary = match (&self.pending_user_response, &line.item) {
@@ -156,6 +156,11 @@ impl RollbackPlanner {
         self.pending_delivery_boundary = None;
 
         match &line.item {
+            RolloutItem::PanngCommit(_) => {
+                return Err(migration_error(
+                    "Panng history requires branch-aware rollback",
+                ));
+            }
             RolloutItem::SessionMeta(_) => self.record_boundaries[index] = None,
             RolloutItem::ResponseItem(response) => {
                 if matches!(&response.item, ResponseItem::Message { role, .. } if role == "assistant")

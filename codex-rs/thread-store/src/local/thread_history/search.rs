@@ -223,6 +223,7 @@ ORDER BY rollout_ordinal ASC
                 CursorScope::Turns,
                 turn_rollout_ordinal,
                 /*include_anchor*/ true,
+                /*rollout_id*/ None,
             )?;
             for (occurrence_index, matched) in
                 matches.into_iter().enumerate().skip(first_occurrence_index)

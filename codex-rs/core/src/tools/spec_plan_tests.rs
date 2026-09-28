@@ -3409,3 +3409,45 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     bedrock_with_standalone_web_search.assert_visible_contains(&["web_search"]);
     bedrock_with_standalone_web_search.assert_visible_lacks(&["web"]);
 }
+
+#[tokio::test]
+async fn panng_shell_plan_uses_finite_exec_without_changing_native_or_disabled_shell() {
+    use codex_protocol::protocol::ThreadHistoryMode;
+
+    for mode in [ThreadHistoryMode::Paginated, ThreadHistoryMode::PanngV1] {
+        let plan = probe(|turn| {
+            turn.history_mode = mode;
+            set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
+            set_feature(turn, Feature::CodeMode, /*enabled*/ false);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).shell_type =
+                    ConfigShellToolType::UnifiedExec;
+            });
+        })
+        .await;
+        plan.assert_registered_contains(&["exec_command"]);
+        let command = plan.visible_spec("exec_command");
+        assert_eq!(
+            (
+                has_parameter(command, "timeout_ms"),
+                has_parameter(command, "yield_time_ms"),
+                plan.registered_names
+                    .iter()
+                    .any(|name| name == "write_stdin")
+            ),
+            if mode == ThreadHistoryMode::PanngV1 {
+                (true, false, false)
+            } else {
+                (false, true, true)
+            },
+        );
+    }
+    let disabled = probe(|turn| {
+        turn.history_mode = ThreadHistoryMode::PanngV1;
+        update_turn_settings_for_test(turn, |settings| {
+            Arc::make_mut(&mut settings.model_info).shell_type = ConfigShellToolType::Disabled;
+        });
+    })
+    .await;
+    disabled.assert_registered_lacks(&["exec_command", "write_stdin"]);
+}

@@ -1524,6 +1524,15 @@ impl ThreadManager {
             initial_history: history,
             persistence: fork_persistence,
         } = fork_history;
+        if !matches!(
+            &fork_persistence,
+            ForkPersistence::Referenced {
+                history_base: Some(_),
+                ..
+            }
+        ) {
+            crate::panng::host_replay::reject_unsupported_fork(history.get_rollout_items())?;
+        }
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
         let source_thread_id = match &history {

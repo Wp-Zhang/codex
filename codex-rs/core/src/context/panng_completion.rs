@@ -6,12 +6,24 @@ pub(crate) struct PanngCompletion(String);
 
 impl PanngCompletion {
     pub(crate) fn new(id: String, output: String) -> Result<Self, CodexErr> {
-        let body = serde_json::json!({"operation_id": id, "output": output}).to_string();
-        // Conservative byte bound includes wrapper headroom; test tools only, no truncation claims.
+        let mut body = serde_json::json!({"operation_id": id, "output": output}).to_string();
         if body.len() > 768 {
-            return Err(CodexErr::Fatal(
-                "prototype completion exceeds byte limit".into(),
-            ));
+            let mut end = output.len().min(480);
+            while !output.is_char_boundary(end) {
+                end -= 1;
+            }
+            let mut preview = output[..end].to_owned();
+            loop {
+                body = serde_json::json!({"operation_id":id,"output":preview,"truncated":true,"read_tool":"read_operation_result"}).to_string();
+                if body.len() <= 768 {
+                    break;
+                }
+                if preview.pop().is_none() {
+                    return Err(CodexErr::Fatal(
+                        "completion identity exceeds notification limit".into(),
+                    ));
+                }
+            }
         }
         Ok(Self(body))
     }

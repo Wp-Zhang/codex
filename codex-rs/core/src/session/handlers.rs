@@ -423,6 +423,49 @@ pub(super) async fn submission_loop(
     // To break out of this loop, send Op::Shutdown.
     let mut shutdown_received = false;
     while let Ok(sub) = rx_sub.recv().await {
+        if sess
+            .services
+            .thread_extension_data
+            .get::<super::panng_bootstrap::Bootstrap>()
+            .is_some()
+            && !matches!(
+                sub.op,
+                Op::Shutdown
+                    | Op::Interrupt
+                    | Op::CleanBackgroundTerminals
+                    | Op::TurnInput { .. }
+                    | Op::ExecApproval { .. }
+                    | Op::PatchApproval { .. }
+                    | Op::UserInputAnswer { .. }
+                    | Op::ThreadSettings { .. }
+            )
+        {
+            match sub.op {
+                Op::TurnInput { reply, .. } | Op::RecoverTurn { reply, .. } => {
+                    let _ = reply.send(Err(CodexErr::InvalidRequest(
+                        "This operation is not supported by Panng yet".into(),
+                    )));
+                }
+                Op::ThreadSettings {
+                    reply: Some(reply), ..
+                } => {
+                    let _ = reply.send(Err(CodexErr::InvalidRequest(
+                        "Panng settings updates are not supported yet".into(),
+                    )));
+                }
+                _ => {}
+            }
+            sess.send_event_raw(Event {
+                id: sub.id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "This operation is not supported by Panng yet".into(),
+                    codex_error_info: None,
+                    misalignment: None,
+                }),
+            })
+            .await;
+            continue;
+        }
         if matches!(sub.op, Op::ResolveElicitation { .. }) {
             debug!(submission_id = %sub.id, operation = sub.op.kind(), "Submission");
         } else {
@@ -521,6 +564,44 @@ pub(super) async fn submission_loop(
                     thread_settings,
                     reply,
                 } => {
+                    if sess
+                        .services
+                        .thread_extension_data
+                        .get::<super::panng_bootstrap::Bootstrap>()
+                        .is_some()
+                    {
+                        let result = sess
+                            .update_panng_settings_if(
+                                thread_settings::prepare_update(thread_settings),
+                                |_, _| true,
+                            )
+                            .await;
+                        match result {
+                            Ok(Some(commit)) => {
+                                sess.state.lock().await.last_started_turn_id = None;
+                                if let Some(reply) = reply {
+                                    let _ = reply.send(Ok(()));
+                                }
+                                sess.emit_panng_settings_applied(sub.id.clone(), commit.snapshot)
+                                    .await;
+                            }
+                            Ok(None) => unreachable!("unconditional Panng settings update"),
+                            Err(error) => {
+                                if let Some(reply) = reply {
+                                    let _ = reply.send(Err(error));
+                                } else {
+                                    sess.send_event_raw(Event {
+                                        id: sub.id.clone(),
+                                        msg: EventMsg::Error(
+                                            error.to_error_event(/*message_prefix*/ None),
+                                        ),
+                                    })
+                                    .await;
+                                }
+                            }
+                        }
+                        return false;
+                    }
                     let _settings_guard = thread_settings::acquire_persistence_lock(&sess).await;
                     match thread_settings::update(&sess, thread_settings).await {
                         Ok(snapshot) => {

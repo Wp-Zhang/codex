@@ -4585,7 +4585,8 @@
     "ThreadHistoryMode": {
       "enum": [
         "legacy",
-        "paginated"
+        "paginated",
+        "panngV1"
       ],
       "type": "string"
     },

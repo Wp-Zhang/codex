@@ -150,7 +150,14 @@ mod network_approval;
 mod openai_file_mcp;
 mod otel;
 mod override_updates;
+mod panng_bootstrap;
+#[cfg(unix)]
+mod panng_compaction_turn;
 mod panng_prototype;
+#[cfg(unix)]
+mod panng_public_turn;
+#[cfg(unix)]
+mod panng_real_tools;
 mod pending_input;
 mod pending_input_persistence;
 mod permissions_messages;

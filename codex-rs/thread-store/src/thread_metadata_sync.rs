@@ -221,7 +221,7 @@ impl ThreadMetadataSync {
         let mut update = self.observe_items_with_update(items, ThreadMetadataPatch::default())?;
         if matches!(
             canonical_history_mode_from_rollout_items(items),
-            ThreadHistoryMode::Paginated
+            ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1
         ) {
             // Paginated rollouts never append metadata-only SessionMeta updates. Do not reapply
             // initial metadata when resume history is flushed after the first append.
@@ -241,6 +241,18 @@ impl ThreadMetadataSync {
         }
         for item in items {
             match item {
+                RolloutItem::PanngCommit(commit) => {
+                    let effects = commit
+                        .checkpoint()
+                        .map_or(commit.host_effects(), |checkpoint| {
+                            checkpoint.companions.as_slice()
+                        });
+                    if !effects.is_empty() {
+                        update = self
+                            .observe_items_with_update(effects, update)
+                            .unwrap_or_default();
+                    }
+                }
                 RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == self.thread_id => {
                     // Never derive display metadata from the synthetic prompt.
                     if codex_state::is_guardian_review_source(&meta_line.meta.source) {

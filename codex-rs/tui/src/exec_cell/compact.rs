@@ -71,7 +71,11 @@ impl ExecCell {
             "•".green().bold()
         };
         let title = if let Some(output) = failed {
-            format!("Failed (exit {})", output.exit_code)
+            if output.unconfirmed.is_some() {
+                "Failed (exit unknown)".to_owned()
+            } else {
+                format!("Failed (exit {})", output.exit_code)
+            }
         } else if self.is_active() {
             "Running".to_owned()
         } else if call.is_unified_exec_interaction() {

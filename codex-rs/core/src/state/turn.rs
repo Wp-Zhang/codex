@@ -108,8 +108,8 @@ pub(crate) struct TurnState {
 /// Host receipt metadata follows the response through the asynchronous tool waiter.
 pub(crate) struct AcceptedUserInputResponse {
     pub(crate) response: RequestUserInputResponse,
-    /// Order reserved when the host accepts this response.
-    pub(crate) acceptance_order: u64,
+    /// Native acceptance reserves immediately; Panng reserves in its acknowledged candidate.
+    pub(crate) acceptance_order: Option<u64>,
 }
 
 pub(crate) struct PendingRequestPermissions {

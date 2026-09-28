@@ -49,6 +49,7 @@ use codex_otel::TURN_UNIFIED_EXEC_RUNNING_PROCESSES_METRIC;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -375,7 +376,8 @@ impl Session {
                 let sess = Arc::clone(&session);
                 // Private reviewers save their transcript together with the terminal event.
                 // Errors and cancellation retain their existing save path.
-                if (!sess.is_private_guardian_reviewer().await
+                if ctx_for_finish.history_mode != ThreadHistoryMode::PanngV1
+                    && (!sess.is_private_guardian_reviewer().await
                     || task_cancellation_token.is_cancelled()
                     || task_result.is_err())
                     && let Err(err) = sess.flush_rollout().await
@@ -451,6 +453,14 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
+        if self
+            .services
+            .thread_extension_data
+            .get::<crate::session::panng_bootstrap::Bootstrap>()
+            .is_some()
+        {
+            return;
+        }
         if !self.input_queue.has_pending_mailbox_items().await
             || (!self.input_queue.has_trigger_turn_mailbox_items().await
                 && !self.has_outstanding_durable_sleep())
@@ -623,6 +633,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         task_result: SessionTaskResult,
     ) {
+        let panng = turn_context.history_mode == ThreadHistoryMode::PanngV1;
         let (last_agent_message, abort_reason) = match task_result {
             Ok(last_agent_message) => (last_agent_message, None),
             Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
@@ -630,17 +641,21 @@ impl Session {
             }
             Err(err) => {
                 warn!(%err, "session task returned an unexpected error");
-                self.emit_turn_error_lifecycle(
-                    turn_context.as_ref(),
-                    err.to_codex_protocol_error(),
-                )
-                .await;
-                self.track_turn_codex_error(turn_context.as_ref(), &err);
-                self.send_event(
-                    turn_context.as_ref(),
-                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
-                )
-                .await;
+                if panng {
+                    self.report_panng_task_error(&turn_context, &err).await;
+                } else {
+                    self.emit_turn_error_lifecycle(
+                        turn_context.as_ref(),
+                        err.to_codex_protocol_error(),
+                    )
+                    .await;
+                    self.track_turn_codex_error(turn_context.as_ref(), &err);
+                    self.send_event(
+                        turn_context.as_ref(),
+                        EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                    )
+                    .await;
+                }
                 (None, None)
             }
         };
@@ -677,14 +692,35 @@ impl Session {
                 std::mem::take(&mut ts.token_usage_by_model),
             )
         };
-        run_hooks_and_record_inputs(
-            self,
-            &turn_context,
-            &turn_context.capture_current_model_info(),
-            &pending_input,
-            PersistContext::Standard,
-        )
-        .await;
+        if panng && !pending_input.is_empty() {
+            let step = turn_state.lock().await.last_known_step_context.clone();
+            if let Some(step) = step {
+                if let Err(error) = self
+                    .commit_panng_inputs(&step, pending_input, Vec::new())
+                    .await
+                {
+                    self.report_panng_task_error(&turn_context, &error).await;
+                }
+            } else {
+                self.report_panng_task_error(
+                    &turn_context,
+                    &codex_protocol::error::CodexErr::Fatal(
+                        "accepted input could not be recorded because no model step was captured"
+                            .into(),
+                    ),
+                )
+                .await;
+            }
+        } else if !panng {
+            run_hooks_and_record_inputs(
+                self,
+                &turn_context,
+                &turn_context.capture_current_model_info(),
+                &pending_input,
+                PersistContext::Standard,
+            )
+            .await;
+        }
         let turn_telemetry = &turn_context.session_telemetry;
         // Emit token usage metrics.
         {
@@ -811,11 +847,16 @@ impl Session {
             ThreadIdleCause::Completed
         };
         let event = if let Some(reason) = abort_reason {
-            if reason == TurnAbortReason::Interrupted {
+            if !panng && reason == TurnAbortReason::Interrupted {
                 run_turn_interrupt_hooks(self, &turn_context, &turn_state).await;
             }
-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
+            if !panng {
+                self.emit_turn_abort_lifecycle(
+                    reason.clone(),
+                    turn_context.extension_data.as_ref(),
+                )
                 .await;
+            }
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some(turn_context.sub_id.clone()),
                 reason,
@@ -829,8 +870,10 @@ impl Session {
                 .time_to_first_token_ms()
                 .await;
             let error = turn_context.terminal_error.lock().await.clone();
-            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
-                .await;
+            if !panng {
+                self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
+                    .await;
+            }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn_context.sub_id.clone(),
                 last_agent_message,
@@ -841,9 +884,13 @@ impl Session {
                 time_to_first_token_ms,
             })
         };
-        let saved_guardian_completion =
-            matches!(event, EventMsg::TurnComplete(_)) && self.is_private_guardian_reviewer().await;
-        if !saved_guardian_completion {
+        let saved_guardian_completion = !panng
+            && matches!(event, EventMsg::TurnComplete(_))
+            && self.is_private_guardian_reviewer().await;
+        if panng {
+            self.finish_panng_terminal(&turn_context, event.clone())
+                .await;
+        } else if !saved_guardian_completion {
             self.send_event(turn_context.as_ref(), event.clone()).await;
         }
 
@@ -864,11 +911,19 @@ impl Session {
             self.send_event(turn_context.as_ref(), event).await;
         }
         if cleared_active_turn {
+            let idle_cause = if panng && turn_context.terminal_error.lock().await.is_some() {
+                ThreadIdleCause::Failed
+            } else {
+                idle_cause
+            };
             self.emit_thread_idle_lifecycle_if_idle(idle_cause).await;
         }
         // Private reviewers already flushed the terminal event before delivering it.
         // Other buffering writers still need a barrier for the terminal event.
-        if !saved_guardian_completion && let Err(err) = self.flush_rollout().await {
+        if !panng
+            && !saved_guardian_completion
+            && let Err(err) = self.flush_rollout().await
+        {
             warn!("failed to flush rollout after emitting terminal turn event: {err}");
         }
         if cleared_active_turn {
@@ -910,10 +965,11 @@ impl Session {
 
     async fn handle_task_abort(
         self: &Arc<Self>,
-        task: RunningTask,
+        mut task: RunningTask,
         reason: TurnAbortReason,
         turn_state: &Mutex<TurnState>,
     ) {
+        let panng = task.turn_context.history_mode == ThreadHistoryMode::PanngV1;
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
@@ -947,12 +1003,29 @@ impl Session {
         }
 
         task.handle.abort();
+        if panng {
+            // Join the cancelled future before settlement so no transaction lease remains live.
+            if let Err(error) = (&mut task.handle).await
+                && !error.is_cancelled()
+            {
+                warn!(%error, "Panng task failed while aborting");
+            }
+        }
+
+        if panng {
+            let pending = self
+                .input_queue
+                .take_pending_input_for_turn_state(turn_state)
+                .await;
+            crate::session::panng_input::PendingInputs::retain(&task.turn_context, pending);
+        }
 
         session_task
             .abort(Arc::clone(self), Arc::clone(&task.turn_context))
             .await;
 
-        if reason == TurnAbortReason::Interrupted
+        if !panng
+            && reason == TurnAbortReason::Interrupted
             && let Some(marker) = interrupted_turn_history_marker(
                 InterruptedTurnHistoryMarker::from_config_and_version(
                     task.turn_context.config.as_ref(),
@@ -973,7 +1046,7 @@ impl Session {
             }
         }
 
-        if reason == TurnAbortReason::Interrupted {
+        if !panng && reason == TurnAbortReason::Interrupted {
             run_turn_interrupt_hooks(self, &task.turn_context, turn_state).await;
         }
 
@@ -1000,6 +1073,10 @@ impl Session {
             completed_at,
             duration_ms,
         });
+        if panng {
+            self.finish_panng_terminal(&task.turn_context, event).await;
+            return;
+        }
         self.send_event(task.turn_context.as_ref(), event).await;
         // Regular items were flushed before this terminal event was appended; buffering
         // thread writers may not flush it without another explicit barrier.

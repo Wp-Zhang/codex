@@ -3715,7 +3715,8 @@ async fn start_new_context_window_persists_checkpoint_state() {
     };
     let persisted_compacted = resumed.history.iter().rev().find_map(|item| match item {
         RolloutItem::Compacted(compacted) => Some(compacted),
-        RolloutItem::SessionMeta(_)
+        RolloutItem::PanngCommit(_)
+        | RolloutItem::SessionMeta(_)
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
@@ -3810,7 +3811,8 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
     };
     let persisted_item = resumed.history.iter().find_map(|item| match item {
         RolloutItem::ResponseItem(response_item) => Some(response_item),
-        RolloutItem::SessionMeta(_)
+        RolloutItem::PanngCommit(_)
+        | RolloutItem::SessionMeta(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)
@@ -6682,6 +6684,27 @@ async fn load_latest_config_for_session(session: &Session) -> Config {
 async fn make_session_with_config_and_rx(
     mutator: impl FnOnce(&mut Config),
 ) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
+    let (tx_event, rx_event) = async_channel::unbounded();
+    let session = make_session_with_setup_and_events(
+        mutator,
+        |_| {},
+        Default::default(),
+        /*startup*/ None,
+        tx_event,
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+    )
+    .await?;
+    Ok((session, rx_event))
+}
+
+pub(crate) async fn make_session_with_setup_and_events(
+    mutator: impl FnOnce(&mut Config),
+    setup: impl FnOnce(&mut SessionConfiguration),
+    history_mode: ThreadHistoryMode,
+    startup: Option<Arc<startup::SessionStartup>>,
+    tx_event: async_channel::Sender<Event>,
+    extensions: Arc<codex_extension_api::ExtensionRegistry<Config>>,
+) -> anyhow::Result<Arc<Session>> {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
     mutator(&mut config);
@@ -6704,7 +6727,7 @@ async fn make_session_with_config_and_rx(
         },
     };
     let default_environments = vec![local(config.cwd.clone())];
-    let session_configuration = SessionConfiguration {
+    let mut session_configuration = SessionConfiguration {
         environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
@@ -6741,7 +6764,7 @@ async fn make_session_with_config_and_rx(
         app_server_client_version: None,
         trusted_guardian_reviewer: false,
         session_source: SessionSource::Exec,
-        history_mode: Default::default(),
+        history_mode,
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -6750,7 +6773,7 @@ async fn make_session_with_config_and_rx(
         user_shell_override: None,
     };
 
-    let (tx_event, rx_event) = async_channel::unbounded();
+    setup(&mut session_configuration);
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
@@ -6764,7 +6787,7 @@ async fn make_session_with_config_and_rx(
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
 
     let session = Session::new(
-        /*startup*/ None,
+        startup,
         session_configuration,
         &default_environments,
         Arc::clone(&config),
@@ -6784,7 +6807,7 @@ async fn make_session_with_config_and_rx(
         plugins_manager,
         mcp_manager,
         Arc::new(codex_code_mode::DisabledCodeModeSessionProvider),
-        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        extensions,
         codex_extension_api::ExtensionDataInit::default(),
         ClientMcpExtensions::default(),
         LocalAgentControl::default().into(),
@@ -6806,7 +6829,7 @@ async fn make_session_with_config_and_rx(
     )
     .await?;
 
-    Ok((session, rx_event))
+    Ok(session)
 }
 
 async fn make_session_with_history_source_and_agent_control_and_rx(

@@ -163,3 +163,44 @@ fn older_reviewer_is_used_when_latest_turn_context_omits_it() {
         })
     );
 }
+
+#[test]
+fn panng_permissions_fallback_uses_remaining_inner_items_and_preserves_clear() {
+    // The reviewer source precedes the turn inside the same outer commit. An outer index
+    // slice would omit it and incorrectly select the older native source.
+    let old = settings_item(
+        AskForApproval::Never,
+        ApprovalsReviewer::User,
+        Some(ActivePermissionProfile::new("old")),
+    );
+    let saved = settings_item(
+        AskForApproval::OnRequest,
+        ApprovalsReviewer::AutoReview,
+        Some(ActivePermissionProfile::new("saved")),
+    );
+    let context = turn_context_item(
+        "new",
+        AskForApproval::Never,
+        /*approvals_reviewer*/ None,
+        /*active_permission_profile*/ None,
+    );
+    let commit: RolloutItem = serde_json::from_value(serde_json::json!({
+        "type": "panng_commit", "payload": {
+            "version": 1,
+            "branch":"00000000-0000-4000-8000-000000000001",
+            "commit_id":"00000000-0000-4000-8000-000000000002",
+            "sequence":1,"previous_sequence":0,
+            "mutation":{"Delta":{"changes":[]}},
+            "host_effects":[saved,context],"checkpoint":null
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        latest_persisted_resume_settings(&[old, commit]),
+        Some(PersistedResumeSettings {
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            active_permission_profile: None,
+        })
+    );
+}

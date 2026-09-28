@@ -4,8 +4,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
+use codex_history::HostReplayItem;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
+use codex_history::host_replay_items;
 use codex_protocol::mcp::McpAttribution;
 use codex_protocol::mcp::McpAttributionErrorReason;
 use codex_protocol::mcp::McpAttributionSource;
@@ -54,9 +56,9 @@ impl McpAttributionRecorder {
             persisted_revision: 0,
         };
         let mut found_checkpoint = matches!(history, InitialHistory::New | InitialHistory::Cleared);
-        for item in history.get_rollout_items() {
+        for item in host_replay_items(history.get_rollout_items()) {
             match item {
-                RolloutItem::ResponseItem(envelope) => {
+                HostReplayItem::Item(RolloutItem::ResponseItem(envelope)) => {
                     if let Some(metadata) = envelope.metadata.as_ref()
                         && let Some(checkpoint) = metadata.mcp_attribution.as_ref()
                     {
@@ -64,7 +66,7 @@ impl McpAttributionRecorder {
                         state.merge_checkpoint(checkpoint);
                     }
                 }
-                RolloutItem::Compacted(compacted) => {
+                HostReplayItem::Compacted(compacted) => {
                     for metadata in compacted
                         .replacement_history
                         .iter()

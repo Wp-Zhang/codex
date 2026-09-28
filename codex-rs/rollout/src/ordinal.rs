@@ -26,7 +26,7 @@ impl RolloutOrdinalState {
     ) -> Self {
         match history_mode {
             ThreadHistoryMode::Legacy => Self::Legacy,
-            ThreadHistoryMode::Paginated => Self::Paginated {
+            ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1 => Self::Paginated {
                 next: Some(history_base.map_or(0, |base| base.end_ordinal_exclusive)),
             },
         }
@@ -60,6 +60,12 @@ pub(crate) fn ordinal_state_for_rollout(
     else {
         return Ok(RolloutOrdinalState::Legacy);
     };
+    if history_mode == ThreadHistoryMode::PanngV1 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Panng ordinals require strict checkpoint recovery",
+        ));
+    }
     if matches!(history_mode, ThreadHistoryMode::Legacy) {
         return Ok(RolloutOrdinalState::Legacy);
     }

@@ -566,6 +566,20 @@ fn build_model_visible_specs(
         }
 
         let tool_name = tool.runtime.tool_name();
+        if turn_context.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1
+            && (!tool_name.is_default_namespace()
+                || !matches!(
+                    tool_name.name.as_str(),
+                    "exec_command"
+                        | "apply_patch"
+                        | "read_operation_result"
+                        | "panng_probe"
+                        | "request_user_input"
+                        | "update_plan"
+                ))
+        {
+            continue;
+        }
         if is_hidden_by_code_mode_only(turn_context, model_info, &tool_name, exposure) {
             continue;
         }
@@ -580,7 +594,9 @@ fn build_model_visible_specs(
             spec,
         ));
     }
-    specs.extend(hosted_specs);
+    if turn_context.history_mode != codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+        specs.extend(hosted_specs);
+    }
 
     merge_into_namespaces(specs)
         .into_iter()
@@ -1029,6 +1045,9 @@ fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolR
         return;
     }
 
+    if context.turn_context.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+        registry.add(crate::panng::execution::result_reader::ResultReader);
+    }
     add_shell_tools(context, registry);
     add_mcp_resource_tools(context, registry);
     add_core_utility_tools(context, registry);
@@ -1105,7 +1124,10 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
         ),
         include_windows_shell_guidance: should_include_windows_shell_guidance(context.environments),
     };
-    if features.enabled(Feature::UnifiedExec) {
+    if turn_context.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+        // Durable cross-step jobs finish at process exit; no interactive process is handed off.
+        registry.add(ExecCommandHandler::one_shot(options));
+    } else if features.enabled(Feature::UnifiedExec) {
         registry.add(ExecCommandHandler::new(options));
         registry.add(WriteStdinHandler);
     } else {

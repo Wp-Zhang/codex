@@ -64,7 +64,35 @@ pub(super) async fn load_latest_model_context(
         });
     }
 
-    let items = if matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated) {
+    let items = if session_meta.meta.history_mode == ThreadHistoryMode::PanngV1 {
+        let expected_id = params.thread_id;
+        tokio::task::spawn_blocking(move || {
+            let recovered = codex_rollout::read_panng_suffix(std::fs::File::open(&path)?)?;
+            if recovered.thread_id != expected_id {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Panng context belongs to another thread",
+                ));
+            }
+            let header = codex_rollout::PanngSessionHeader::from_slice(&recovered.header_bytes)
+                .map_err(io::Error::other)?;
+            let mut items = vec![RolloutItem::SessionMeta(header.session_meta().clone())];
+            items.extend(
+                recovered
+                    .commits
+                    .into_iter()
+                    .map(|commit| RolloutItem::PanngCommit(Box::new(commit))),
+            );
+            Ok::<_, io::Error>(items)
+        })
+        .await
+        .map_err(|error| ThreadStoreError::Internal {
+            message: error.to_string(),
+        })?
+        .map_err(|error| ThreadStoreError::Internal {
+            message: error.to_string(),
+        })?
+    } else if matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated) {
         let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
         scan_model_context_from_lineage(lineage, session_meta).await?
     } else {
@@ -97,6 +125,11 @@ pub(super) async fn load_for_fork(
                 source_path.display()
             ),
         })?;
+    if session_meta.meta.history_mode == ThreadHistoryMode::PanngV1 {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "fork Panng history through native lineage",
+        });
+    }
     if session_meta.meta.multi_agent_version.is_none() {
         // Recover only the runtime version before applying the fork cutoff. Stop at the
         // newest version-bearing context instead of retaining the source's full replay.

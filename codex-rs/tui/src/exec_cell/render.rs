@@ -332,6 +332,7 @@ impl ExecCell {
         let nonzero_exit = |call: &ExecCall| {
             call.duration
                 .and(call.output.as_ref())
+                .filter(|output| output.unconfirmed.is_none())
                 .map(|output| output.exit_code)
                 .filter(|code| *code != 0)
         };

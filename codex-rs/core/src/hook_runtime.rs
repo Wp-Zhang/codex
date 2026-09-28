@@ -1,3 +1,8 @@
+#[path = "panng/hook_validation.rs"]
+mod panng_hook_validation;
+pub(crate) use panng_hook_validation::inspect_pending_input_panng;
+pub(crate) use panng_hook_validation::panng_hook_context_items;
+pub(crate) use panng_hook_validation::record_additional_contexts_checked;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,6 +34,8 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_plugin::ExecutorPluginHookSource;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::FunctionCallOutputItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -129,6 +136,16 @@ pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> bool {
+    // Native callers keep their existing bool contract; Panng's driver uses the fallible API.
+    run_pending_session_start_hooks_checked(sess, turn_context)
+        .await
+        .unwrap_or(true)
+}
+
+pub(crate) async fn run_pending_session_start_hooks_checked(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<bool> {
     while let Some(session_start_source) = sess.take_pending_session_start_source().await {
         // Spawned subagents can start fresh or fork their parent's history, so both
         // sources dispatch SubagentStart. Internal/system subagents skip start hooks.
@@ -147,7 +164,7 @@ pub(crate) async fn run_pending_session_start_hooks(
                     agent_type: context.agent_type,
                 }
             }
-            SessionSource::SubAgent(_) => return false,
+            SessionSource::SubAgent(_) => return Ok(false),
             _ => StartHookTarget::SessionStart {
                 source: session_start_source,
             },
@@ -170,14 +187,14 @@ pub(crate) async fn run_pending_session_start_hooks(
             hooks.run_session_start(request, Some(turn_context.sub_id.clone())),
         )
         .await
-        .record_additional_contexts(sess, turn_context)
-        .await
+        .record_additional_contexts_checked(sess, turn_context)
+        .await?
         {
-            return true;
+            return Ok(true);
         }
     }
 
-    false
+    Ok(false)
 }
 
 /// Runs matching `PreToolUse` hooks before a tool executes.
@@ -191,7 +208,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     tool_use_id: String,
     tool_name: &HookToolName,
     tool_input: &Value,
-) -> PreToolUseHookResult {
+) -> CodexResult<PreToolUseHookResult> {
     let turn_context = &step_context.turn;
     let request = PreToolUseRequest {
         session_id: sess.session_id().into(),
@@ -203,7 +220,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),
         tool_name: tool_name.name().to_string(),
         matcher_aliases: tool_name.matcher_aliases().to_vec(),
-        tool_use_id,
+        tool_use_id: tool_use_id.clone(),
         tool_input: tool_input.clone(),
     };
     let hooks = sess.hooks();
@@ -214,33 +231,45 @@ pub(crate) async fn run_pre_tool_use_hooks(
         hook_events,
         should_block,
         block_reason,
-        additional_contexts,
+        mut additional_contexts,
         updated_input,
     } = hooks.run_pre_tool_use(request).await;
+    if turn_context.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1
+        && !hook_events.is_empty()
+    {
+        additional_contexts.push(
+            serde_json::json!({
+                "panng_hook_decision":"PreToolUse", "tool_use_id":tool_use_id,
+                "tool_name":tool_name.name(), "blocked":should_block, "reason":block_reason,
+                "updated_input":updated_input,
+            })
+            .to_string(),
+        );
+    }
     emit_hook_completed_events(sess, turn_context, hook_events).await;
-    record_additional_contexts(sess, turn_context, additional_contexts).await;
+    record_additional_contexts_checked(sess, turn_context, additional_contexts).await?;
 
     if !should_block {
-        return PreToolUseHookResult::Continue { updated_input };
+        return Ok(PreToolUseHookResult::Continue { updated_input });
     }
 
     let Some(reason) = block_reason else {
-        return PreToolUseHookResult::Continue {
+        return Ok(PreToolUseHookResult::Continue {
             updated_input: None,
-        };
+        });
     };
 
     if (tool_name.name() == "Bash" || tool_name.name() == "apply_patch")
         && let Some(command) = tool_input.get("command").and_then(Value::as_str)
     {
-        PreToolUseHookResult::Blocked(format!(
+        Ok(PreToolUseHookResult::Blocked(format!(
             "Command blocked by PreToolUse hook: {reason}. Command: {command}"
-        ))
+        )))
     } else {
-        PreToolUseHookResult::Blocked(format!(
+        Ok(PreToolUseHookResult::Blocked(format!(
             "Tool call blocked by PreToolUse hook: {reason}. Tool: {}",
             tool_name.name()
-        ))
+        )))
     }
 }
 
@@ -314,7 +343,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),
         tool_name,
         matcher_aliases,
-        tool_use_id,
+        tool_use_id: tool_use_id.clone(),
         tool_input,
         tool_response,
     };
@@ -322,7 +351,18 @@ pub(crate) async fn run_post_tool_use_hooks(
     let preview_runs = hooks.preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
-    let outcome = hooks.run_post_tool_use(request).await;
+    let mut outcome = hooks.run_post_tool_use(request).await;
+    if turn_context.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1
+        && !outcome.hook_events.is_empty()
+    {
+        outcome.additional_contexts.push(
+            serde_json::json!({
+                "panng_hook_decision":"PostToolUse", "tool_use_id":tool_use_id,
+                "blocked":outcome.should_block, "feedback":outcome.feedback_message,
+            })
+            .to_string(),
+        );
+    }
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
 }
@@ -702,7 +742,9 @@ pub(crate) async fn inspect_pending_input(
             )
             .await
         }
-        TurnInput::ResponseItem(_) | TurnInput::FunctionCallOutput(_) => HookRuntimeOutcome {
+        TurnInput::ResponseItem(_)
+        | TurnInput::FunctionCallOutput(_)
+        | TurnInput::AdditionalContext(_) => HookRuntimeOutcome {
             should_stop: false,
             additional_contexts: Vec::new(),
         },
@@ -763,6 +805,9 @@ pub(crate) async fn record_pending_input(
             }
             sess.ensure_rollout_materialized(persist_context).await;
         }
+        TurnInput::AdditionalContext(_) => {
+            unreachable!("Panng additional context is committed by its input owner")
+        }
         TurnInput::InterAgentCommunication(communication) => {
             sess.record_inter_agent_communication(turn_context, model_info, communication)
                 .await;
@@ -784,6 +829,19 @@ pub(crate) async fn drain_async_hook_results(
     turn_context: &Arc<TurnContext>,
     before_user_prompt: bool,
 ) {
+    // Native callers retain their existing API; Panng uses the checked input-owner path.
+    if let Err(error) =
+        drain_async_hook_results_checked(sess, turn_context, before_user_prompt).await
+    {
+        tracing::error!(%error, "failed to persist hook context");
+    }
+}
+
+pub(crate) async fn drain_async_hook_results_checked(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    before_user_prompt: bool,
+) -> CodexResult<()> {
     while let Ok(result) = sess.async_hook_results.try_recv() {
         let additional_contexts = result
             .run
@@ -794,11 +852,24 @@ pub(crate) async fn drain_async_hook_results(
             .collect::<Vec<_>>();
 
         if before_user_prompt {
-            record_additional_contexts(sess, turn_context, additional_contexts).await;
+            record_additional_contexts_checked(sess, turn_context, additional_contexts).await?;
         } else if !additional_contexts.is_empty() {
-            let _ = sess
-                .inject_hook_context_if_running(additional_context_messages(additional_contexts))
-                .await;
+            if turn_context.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+                let items = panng_hook_context_items(additional_contexts)?;
+                sess.inject_hook_context_if_running(
+                    items.into_iter().map(|envelope| envelope.item).collect(),
+                )
+                .await
+                .map_err(|_| {
+                    CodexErr::Fatal("Panng async hook context lost its active input owner".into())
+                })?;
+            } else {
+                let _ = sess
+                    .inject_hook_context_if_running(additional_context_messages(
+                        additional_contexts,
+                    ))
+                    .await;
+            }
         }
 
         for entry in &result.run.entries {
@@ -815,6 +886,7 @@ pub(crate) async fn drain_async_hook_results(
 
         emit_hook_completed_events(sess, turn_context, vec![result]).await;
     }
+    Ok(())
 }
 
 async fn run_context_injecting_hook<Fut, Outcome>(
@@ -835,14 +907,14 @@ where
 }
 
 impl HookRuntimeOutcome {
-    async fn record_additional_contexts(
+    async fn record_additional_contexts_checked(
         self,
         sess: &Arc<Session>,
         turn_context: &Arc<TurnContext>,
-    ) -> bool {
-        record_additional_contexts(sess, turn_context, self.additional_contexts).await;
+    ) -> CodexResult<bool> {
+        record_additional_contexts_checked(sess, turn_context, self.additional_contexts).await?;
 
-        self.should_stop
+        Ok(self.should_stop)
     }
 }
 

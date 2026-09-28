@@ -116,7 +116,8 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::RetainedContext(_)
-        | RolloutItem::SecurityRiskScore(_) => false,
+        | RolloutItem::SecurityRiskScore(_)
+        | RolloutItem::PanngCommit(_) => false,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
         // so they must rebuild context on their first child turn.
@@ -162,6 +163,9 @@ async fn load_agent_model_context(
     history_mode: ThreadHistoryMode,
 ) -> CodexResult<Option<Vec<RolloutItem>>> {
     match history_mode {
+        ThreadHistoryMode::PanngV1 => Err(CodexErr::InvalidRequest(
+            "Panng subagent history inheritance is not supported yet".into(),
+        )),
         ThreadHistoryMode::Legacy => Ok(state
             .read_stored_thread(ReadThreadParams {
                 thread_id,
@@ -727,11 +731,15 @@ impl LocalAgentControl {
                 let history_mode = if let Some(parent_thread_id) = options.parent_thread_id
                     && let Ok(parent_thread) = state.get_thread(parent_thread_id).await
                 {
-                    matches!(
-                        parent_thread.config_snapshot().await.history_mode,
-                        ThreadHistoryMode::Paginated
-                    )
-                    .then_some(ThreadHistoryMode::Paginated)
+                    match parent_thread.config_snapshot().await.history_mode {
+                        ThreadHistoryMode::Legacy => None,
+                        ThreadHistoryMode::Paginated => Some(ThreadHistoryMode::Paginated),
+                        ThreadHistoryMode::PanngV1 => {
+                            return Err(CodexErr::InvalidRequest(
+                                "Panng subagent creation is not supported yet".into(),
+                            ));
+                        }
+                    }
                 } else {
                     None
                 };
@@ -970,6 +978,11 @@ impl LocalAgentControl {
             | (MultiAgentVersion::V2, _) => (None, None),
         };
         let parent_history_mode = parent_thread.config_snapshot().await.history_mode;
+        if parent_history_mode == ThreadHistoryMode::PanngV1 {
+            return Err(CodexErr::InvalidRequest(
+                "Panng subagent forks are not supported yet".into(),
+            ));
+        }
         // `record_conversation_items` only queues persistence writes asynchronously.
         // Flush before snapshotting store history for a fork.
         parent_thread.ensure_rollout_materialized().await;
@@ -986,6 +999,7 @@ impl LocalAgentControl {
                     ))
                 })?;
 
+        crate::panng::host_replay::reject_unsupported_fork(&forked_rollout_items)?;
         let selected_capability_roots = forked_rollout_items
             .iter()
             .find_map(|item| {
@@ -1171,7 +1185,8 @@ impl LocalAgentControl {
                 | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
                 RolloutItem::RetainedContext(_)
                 | RolloutItem::TokenUsageRecord(_)
-                | RolloutItem::SecurityRiskScore(_) => false,
+                | RolloutItem::SecurityRiskScore(_)
+                | RolloutItem::PanngCommit(_) => false,
             }
         });
         // Full forks reuse the parent's reference context instead of rebuilding it. If that

@@ -1135,3 +1135,17 @@ mod tests {
         })
     }
 }
+
+/// Experimental local journal support; does not enable the Panng execution engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExperimentalPanngCapability {
+    Unsupported,
+    LocalJournalV1,
+}
+
+/// Only Durable permits the caller to publish the matching proposed mutation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExperimentalPanngReconcile {
+    Durable(crate::DurableRecordPosition),
+    Absent,
+}

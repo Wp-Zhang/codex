@@ -20,19 +20,33 @@ use itertools::Either;
 #[derive(Debug, Default)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
+    /// Presentation facts for a finished failure whose exit status was never observed.
+    /// The legacy exit_code/duration pair still drives completed-versus-running state.
+    pub(super) unconfirmed: Option<UnconfirmedCompletion>,
     /// The finalized, interleaved stderr and stdout that replaces any streamed preview.
     aggregated_output: String,
     /// The live preview while command-output deltas are still arriving.
     live_output: Option<LiveCommandOutput>,
 }
 
+#[derive(Debug)]
+pub(super) struct UnconfirmedCompletion {
+    pub(super) duration: Option<Duration>,
+}
+
 impl CommandOutput {
     pub(crate) fn new(exit_code: i32, aggregated_output: String) -> Self {
         Self {
             exit_code,
+            unconfirmed: None,
             aggregated_output,
             live_output: None,
         }
+    }
+
+    pub(crate) fn with_unconfirmed_exit(mut self, duration: Option<Duration>) -> Self {
+        self.unconfirmed = Some(UnconfirmedCompletion { duration });
+        self
     }
 
     /// Returns the total number of logical lines and the number retained for rendering.

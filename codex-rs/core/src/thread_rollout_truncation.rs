@@ -17,7 +17,16 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 
 pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &InitialHistory) -> bool {
-    conversation_history.scan_rollout_items(rollout_item_is_user_turn_boundary)
+    codex_history::host_replay_items(conversation_history.get_rollout_items()).any(
+        |item| match item {
+            codex_history::HostReplayItem::Item(item) => rollout_item_is_user_turn_boundary(item),
+            codex_history::HostReplayItem::Compacted(checkpoint) => checkpoint
+                .replacement_history
+                .iter()
+                .flatten()
+                .any(|item| is_user_turn_boundary(item)),
+        },
+    )
 }
 
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
@@ -170,6 +179,7 @@ pub fn truncate_rollout_after_turn_id(
     mut items: Vec<RolloutItem>,
     last_turn_id: &str,
 ) -> CodexResult<Vec<RolloutItem>> {
+    crate::panng::host_replay::reject_unsupported_fork(&items)?;
     let turns = build_turns_from_rollout_items(&items);
     let turn = turns
         .iter()
@@ -218,6 +228,7 @@ pub fn truncate_rollout_before_turn_id(
     mut items: Vec<RolloutItem>,
     before_turn_id: &str,
 ) -> CodexResult<Vec<RolloutItem>> {
+    crate::panng::host_replay::reject_unsupported_fork(&items)?;
     let cut_index = items.iter().position(|item| {
         matches!(
             item,

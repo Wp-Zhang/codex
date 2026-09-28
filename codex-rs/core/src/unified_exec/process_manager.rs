@@ -598,25 +598,29 @@ impl UnifiedExecProcessManager {
         let process_started_alive = !process.has_exited() && process.exit_code().is_none();
         let mut initial_exec_command_guard = if process_started_alive {
             let initial_exec_command_active = Arc::new(AtomicBool::new(true));
-            self.store_process(
-                Arc::clone(&process),
-                context,
-                &request.command,
-                request.hook_command.clone(),
-                cwd.clone(),
-                request.turn_environment.selection.environment_id.clone(),
-                permissions,
-                plugin_attribution.clone(),
-                start,
-                request.process_id,
-                request.tty,
-                deferred_network_approval.clone(),
-                network_denial_monitor,
-                metrics_sidecar,
-                Arc::clone(&output_buffer),
-                Arc::clone(&initial_exec_command_active),
-            )
-            .await;
+            let exit_watcher = self
+                .store_process(
+                    Arc::clone(&process),
+                    context,
+                    &request.command,
+                    request.hook_command.clone(),
+                    cwd.clone(),
+                    request.turn_environment.selection.environment_id.clone(),
+                    permissions,
+                    plugin_attribution.clone(),
+                    start,
+                    request.process_id,
+                    request.tty,
+                    deferred_network_approval.clone(),
+                    network_denial_monitor,
+                    metrics_sidecar,
+                    Arc::clone(&output_buffer),
+                    Arc::clone(&initial_exec_command_active),
+                )
+                .await;
+            if let Some(completion) = completion.as_mut() {
+                completion.exit_watcher = Some(exit_watcher);
+            }
             InitialExecCommandGuard {
                 active: Some(initial_exec_command_active),
                 metrics_sidecar: None,
@@ -1204,7 +1208,7 @@ impl UnifiedExecProcessManager {
         metrics_sidecar: Option<PluginMetricsSidecar>,
         output_buffer: Arc<tokio::sync::Mutex<OutputBuffers>>,
         initial_exec_command_active: Arc<AtomicBool>,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         let plugin_metrics_sidecar =
             metrics_sidecar.map(|sidecar| Arc::new(std::sync::Mutex::new(Some(sidecar))));
         let entry = ProcessEntry {
@@ -1246,7 +1250,7 @@ impl UnifiedExecProcessManager {
             started_at,
             network_denial_monitor,
             plugin_metrics_sidecar,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

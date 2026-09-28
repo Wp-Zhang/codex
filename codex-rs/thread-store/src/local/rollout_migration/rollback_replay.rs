@@ -47,8 +47,17 @@ impl ModelReplayPlanner {
         }
     }
 
-    pub(super) fn observe(&mut self, record_index: usize, item: &RolloutItem) {
+    pub(super) fn observe(
+        &mut self,
+        record_index: usize,
+        item: &RolloutItem,
+    ) -> crate::ThreadStoreResult<()> {
         let record = match item {
+            RolloutItem::PanngCommit(_) => {
+                return Err(super::migration_error(
+                    "Panng history requires branch-aware rollback",
+                ));
+            }
             RolloutItem::Compacted(compacted) => ReplayRecord::Compacted {
                 record_index,
                 has_replacement_history: compacted.replacement_history.is_some(),
@@ -79,9 +88,10 @@ impl ModelReplayPlanner {
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::RetainedContext(_)
             | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::WorldState(_) => return,
+            | RolloutItem::WorldState(_) => return Ok(()),
         };
         self.records.push(record);
+        Ok(())
     }
 
     pub(super) fn finish(self) -> ModelReplayPlan {

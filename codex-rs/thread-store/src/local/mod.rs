@@ -7,6 +7,12 @@ mod live_writer;
 mod model_context;
 mod move_thread_to_section;
 mod paginated_fork;
+mod panng;
+mod panng_fork;
+mod panng_projection;
+#[cfg(test)]
+#[path = "panng_tests.rs"]
+mod panng_tests;
 mod pending_thread_metadata;
 mod projects;
 mod read_thread;
@@ -164,6 +170,8 @@ struct LiveRecorderEntry {
     // canonical SessionMeta is durable. Retain the mode captured when live persistence was opened
     // so missing SQLite rows can still be seeded.
     history_mode: ThreadHistoryMode,
+    // Actual live ACK only; cold read positions must never populate this field.
+    panng_projection_target: Option<codex_rollout::PanngProjectionTarget>,
     writer_lock: WriterLockGuard,
 }
 
@@ -383,6 +391,7 @@ impl LocalThreadStore {
                     recorder,
                     rollout_id,
                     history_mode,
+                    panng_projection_target: None,
                     writer_lock,
                 });
                 Ok(())
@@ -534,6 +543,48 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { live_writer::append_items(self, params).await })
     }
 
+    fn experimental_panng_capability(&self) -> crate::ExperimentalPanngCapability {
+        if cfg!(unix) {
+            crate::ExperimentalPanngCapability::LocalJournalV1
+        } else {
+            crate::ExperimentalPanngCapability::Unsupported
+        }
+    }
+    fn experimental_panng_create(
+        &self,
+        params: CreateThreadParams,
+        initial: codex_rollout::PanngCommit,
+    ) -> ThreadStoreFuture<'_, crate::DurableRecordPosition> {
+        Box::pin(async move { panng::create(self, params, initial).await })
+    }
+    fn experimental_panng_resume(
+        &self,
+        params: ResumeThreadParams,
+        branch: codex_rollout::BranchId,
+    ) -> ThreadStoreFuture<'_, codex_rollout::RecoveredPanngSuffix> {
+        Box::pin(async move { panng::resume(self, params, branch).await })
+    }
+    fn experimental_panng_append(
+        &self,
+        thread_id: ThreadId,
+        commit: codex_rollout::PanngCommit,
+    ) -> ThreadStoreFuture<'_, crate::DurableRecordPosition> {
+        Box::pin(async move { panng::append(self, thread_id, commit).await })
+    }
+    fn experimental_panng_reconcile(
+        &self,
+        thread_id: ThreadId,
+        commit: codex_rollout::PanngCommit,
+    ) -> ThreadStoreFuture<'_, crate::ExperimentalPanngReconcile> {
+        Box::pin(async move { panng::reconcile(self, thread_id, commit).await })
+    }
+    fn experimental_panng_read(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, codex_rollout::RecoveredPanngSuffix> {
+        Box::pin(async move { panng::read(self, thread_id).await })
+    }
+
     fn single_record_sync_capability(&self) -> crate::SingleRecordSyncCapability {
         if cfg!(unix) {
             crate::SingleRecordSyncCapability::SingleRecordSyncV1
@@ -594,7 +645,13 @@ impl ThreadStore for LocalThreadStore {
     }
 
     fn prepare_fork(&self, params: PrepareForkParams) -> ThreadStoreFuture<'_, PreparedFork> {
-        Box::pin(async move { paginated_fork::prepare(self, params).await })
+        Box::pin(async move {
+            if panng_projection::is_panng(self, params.thread_id).await? {
+                panng_fork::prepare(self, params).await
+            } else {
+                paginated_fork::prepare(self, params).await
+            }
+        })
     }
 
     fn revert_thread(&self, params: RevertThreadParams) -> ThreadStoreFuture<'_, ()> {

@@ -1,3 +1,31 @@
+#[path = "../panng/bootstrap.rs"]
+pub(crate) mod panng_bootstrap;
+#[path = "../panng/checkpoint.rs"]
+pub(crate) mod panng_checkpoint;
+#[path = "../panng/compaction.rs"]
+mod panng_compaction;
+#[path = "../panng/context.rs"]
+mod panng_context;
+#[path = "../panng/control_tools.rs"]
+mod panng_control_tools;
+#[path = "../panng/events.rs"]
+pub(crate) mod panng_events;
+#[path = "../panng/fork.rs"]
+mod panng_fork;
+#[path = "../panng/host_commit.rs"]
+pub(crate) mod panng_host_commit;
+#[path = "../panng/host_history.rs"]
+pub(crate) mod panng_host_history;
+#[path = "../panng/input.rs"]
+pub(crate) mod panng_input;
+#[path = "../panng/lifecycle.rs"]
+mod panng_lifecycle;
+#[path = "../panng/public_admission.rs"]
+mod panng_public_admission;
+#[path = "../panng/settings.rs"]
+mod panng_settings;
+#[path = "../panng/usage.rs"]
+mod panng_usage;
 pub(crate) mod startup;
 
 use std::borrow::Cow;
@@ -77,7 +105,9 @@ use codex_extension_api::TurnContextContributionInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
+use codex_history::HostReplayItem;
 use codex_history::RolloutItem;
+use codex_history::host_replay_items;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
@@ -289,6 +319,12 @@ use self::turn::agent_message_text;
 use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
+#[cfg(test)]
+#[path = "panng_replay_tests.rs"]
+mod panng_replay_tests;
+#[cfg(all(test, unix))]
+#[path = "../panng/turn_tests.rs"]
+mod panng_turn_tests;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -767,31 +803,10 @@ impl Session {
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let persisted_collaboration_mode = match &conversation_history {
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .rev()
-                .find_map(|item| match item {
-                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-                        if event.thread_id == Some(resumed.conversation_id) =>
-                    {
-                        Some(&event.thread_settings.collaboration_mode)
-                    }
-                    _ => None,
-                })
-                .or_else(|| {
-                    resumed
-                        .history
-                        .iter()
-                        .rev()
-                        .find_map(|item| match item {
-                            RolloutItem::TurnContext(context) => {
-                                Some(context.collaboration_mode.as_ref())
-                            }
-                            _ => None,
-                        })
-                        .flatten()
-                }),
+            InitialHistory::Resumed(resumed) => crate::panng::host_replay::collaboration_mode(
+                &resumed.history,
+                resumed.conversation_id,
+            ),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
         };
         let collaboration_mode = CollaborationMode {
@@ -1558,10 +1573,13 @@ impl Session {
                 let turn_context = self.new_default_turn().await;
                 let rollout_items = resumed_history.history;
                 if matches!(
-                    rollout_items.iter().rev().find_map(|item| match item {
-                        RolloutItem::EventMsg(event) => agent_status_from_event(event),
-                        _ => None,
-                    }),
+                    host_replay_items(&rollout_items)
+                        .rev()
+                        .find_map(|item| match item {
+                            HostReplayItem::Item(RolloutItem::EventMsg(event)) =>
+                                agent_status_from_event(event),
+                            _ => None,
+                        }),
                     Some(AgentStatus::Interrupted)
                 ) {
                     self.agent_status.send_replace(AgentStatus::Interrupted);
@@ -1592,18 +1610,25 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(mut info) = Self::last_token_info_from_rollout(&rollout_items) {
+                    if turn_context.history_mode == ThreadHistoryMode::PanngV1
+                        && info.model_context_window.is_none()
+                    {
+                        info.model_context_window = turn_context.model_context_window();
+                    }
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
                 self.state.lock().await.latest_token_usage_record =
                     Self::last_token_usage_record_from_rollout(&rollout_items);
 
-                // Checkpoint effective settings even when no turn follows the resume.
-                self.persist_rollout_items(&[RolloutItem::EventMsg(
-                    thread_settings::applied_event(self).await,
-                )])
-                .await;
+                // Panng bootstrap commits these only after its durable ResumeFence.
+                if turn_context.history_mode != ThreadHistoryMode::PanngV1 {
+                    self.persist_rollout_items(&[RolloutItem::EventMsg(
+                        thread_settings::applied_event(self).await,
+                    )])
+                    .await;
+                }
 
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
@@ -1620,53 +1645,60 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(mut info) = Self::last_token_info_from_rollout(&rollout_items) {
+                    if turn_context.history_mode == ThreadHistoryMode::PanngV1
+                        && info.model_context_window.is_none()
+                    {
+                        info.model_context_window = turn_context.model_context_window();
+                    }
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
                 self.state.lock().await.latest_token_usage_record =
                     Self::last_token_usage_record_from_rollout(&rollout_items);
 
-                let thread_settings_applied =
-                    RolloutItem::EventMsg(thread_settings::applied_event(self).await);
-                match &self.fork_persistence {
-                    ForkPersistence::Referenced {
-                        inherited_item_count,
-                        ..
-                    } => {
-                        // Ancestor records remain behind history_base; only effective child
-                        // settings and boundaries synthesized by snapshot processing are local.
-                        rollout_items.drain(..*inherited_item_count);
-                        rollout_items.insert(0, thread_settings_applied);
+                if turn_context.history_mode != ThreadHistoryMode::PanngV1 {
+                    let thread_settings_applied =
+                        RolloutItem::EventMsg(thread_settings::applied_event(self).await);
+                    match &self.fork_persistence {
+                        ForkPersistence::Referenced {
+                            inherited_item_count,
+                            ..
+                        } => {
+                            // Ancestor records remain behind history_base; only effective child
+                            // settings and boundaries synthesized by snapshot processing are local.
+                            rollout_items.drain(..*inherited_item_count);
+                            rollout_items.insert(0, thread_settings_applied);
+                        }
+                        ForkPersistence::Copied | ForkPersistence::CopiedDeferred
+                            if is_paginated_subagent =>
+                        {
+                            // Paginated subagents already persist inherited context when their live
+                            // thread is created.
+                            rollout_items.clear();
+                            rollout_items.push(thread_settings_applied);
+                        }
+                        ForkPersistence::Copied | ForkPersistence::CopiedDeferred => {
+                            // Keep the copied prefix and effective child settings in one append so a
+                            // cold resume cannot observe inherited settings as the latest value.
+                            rollout_items.push(thread_settings_applied);
+                        }
                     }
-                    ForkPersistence::Copied | ForkPersistence::CopiedDeferred
-                        if is_paginated_subagent =>
-                    {
-                        // Paginated subagents already persist inherited context when their live
-                        // thread is created.
-                        rollout_items.clear();
-                        rollout_items.push(thread_settings_applied);
-                    }
-                    ForkPersistence::Copied | ForkPersistence::CopiedDeferred => {
-                        // Keep the copied prefix and effective child settings in one append so a
-                        // cold resume cannot observe inherited settings as the latest value.
-                        rollout_items.push(thread_settings_applied);
-                    }
-                }
-                self.persist_rollout_items(&rollout_items).await;
+                    self.persist_rollout_items(&rollout_items).await;
 
-                // Agent spawn owns its final durability barrier so it can overlap the edge write.
-                let persist_context = match self.fork_persistence {
-                    ForkPersistence::CopiedDeferred => PersistContext::SubagentSpawn,
-                    ForkPersistence::Copied | ForkPersistence::Referenced { .. } => {
-                        PersistContext::Standard
-                    }
-                };
-                self.ensure_rollout_materialized(persist_context).await;
+                    // Agent spawn owns its final durability barrier so it can overlap the edge write.
+                    let persist_context = match self.fork_persistence {
+                        ForkPersistence::CopiedDeferred => PersistContext::SubagentSpawn,
+                        ForkPersistence::Copied | ForkPersistence::Referenced { .. } => {
+                            PersistContext::Standard
+                        }
+                    };
+                    self.ensure_rollout_materialized(persist_context).await;
 
-                // Flush after seeding history and any persisted rollout copy.
-                if !is_subagent {
-                    let _ = self.flush_rollout().await;
+                    // Flush after seeding history and any persisted rollout copy.
+                    if !is_subagent {
+                        let _ = self.flush_rollout().await;
+                    }
                 }
                 Some(turn_context)
             }
@@ -1809,19 +1841,38 @@ impl Session {
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
-        rollout_items.iter().rev().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
-            _ => None,
-        })
+        if rollout_items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::PanngCommit(_)))
+        {
+            // Panng persists the authoritative usage record, not the derived TokenCount event.
+            return Self::last_token_usage_record_from_rollout(rollout_items).map(|record| {
+                TokenUsageInfo {
+                    total_token_usage: record.thread_token_usage,
+                    last_token_usage: record.usage,
+                    model_context_window: None,
+                }
+            });
+        }
+        host_replay_items(rollout_items)
+            .rev()
+            .find_map(|item| match item {
+                HostReplayItem::Item(RolloutItem::EventMsg(EventMsg::TokenCount(ev))) => {
+                    ev.info.clone()
+                }
+                _ => None,
+            })
     }
 
     fn last_token_usage_record_from_rollout(
         rollout_items: &[RolloutItem],
     ) -> Option<TokenUsageRecord> {
-        for item in rollout_items.iter().rev() {
+        for item in host_replay_items(rollout_items).rev() {
             match item {
-                RolloutItem::TokenUsageRecord(record) => return Some(record.clone()),
-                RolloutItem::Compacted(compacted) => {
+                HostReplayItem::Item(RolloutItem::TokenUsageRecord(record)) => {
+                    return Some(record.clone());
+                }
+                HostReplayItem::Compacted(compacted) => {
                     return compacted.latest_token_usage_record.clone();
                 }
                 _ => {}
@@ -2521,6 +2572,23 @@ impl Session {
     }
 
     async fn send_event_raw_with_persistence(&self, event: Event, persist: bool) {
+        if self
+            .services
+            .thread_extension_data
+            .get::<panng_bootstrap::Bootstrap>()
+            .is_some()
+        {
+            if panng_events::is_notification(&event.msg) {
+                self.services.mcp_runtime.observe_event(&event.msg);
+                self.services
+                    .rollout_thread_trace
+                    .record_protocol_event(&event.msg);
+                self.deliver_event_raw(event).await;
+            } else {
+                error!(event = ?event.msg, "Panng canonical event reached the native notification path");
+            }
+            return;
+        }
         let flush_guardian_completion = persist
             && matches!(event.msg, EventMsg::TurnComplete(_))
             && self.is_private_guardian_reviewer().await;
@@ -2603,6 +2671,33 @@ impl Session {
         turn_context: &TurnContext,
         item: TurnItem,
     ) {
+        if matches!(
+            item,
+            TurnItem::CommandExecution(_) | TurnItem::FileChange(_)
+        ) && let Some(pool) = turn_context
+            .extension_data
+            .get::<crate::panng::execution::DurablePool>()
+        {
+            let completed_at_ms = now_unix_timestamp_ms();
+            let started_at_ms = turn_context
+                .turn_timing_state
+                .take_item_started(&item.id())
+                .await;
+            if let Err(error) = pool
+                .capture_tool_completed(ItemCompletedEvent {
+                    thread_id: self.thread_id,
+                    turn_id: turn_context.sub_id.clone(),
+                    item,
+                    started_at_ms,
+                    completed_at_ms,
+                })
+                .await
+            {
+                // The pool also retains this failure; advance/stop propagates it to turn cleanup.
+                error!(%error, "failed to capture Panng tool completion");
+            }
+            return;
+        }
         record_turn_ttfm_metric(turn_context, &item).await;
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             contributor
@@ -3160,7 +3255,17 @@ impl Session {
                 Some(at) => {
                     let sender = at.turn_state.lock().await.remove_pending_user_input(sub_id);
                     match sender {
-                        Some(sender) => Some((sender, self.reserve_user_input_order().await)),
+                        Some(sender) => {
+                            let panng = at.task.as_ref().is_some_and(|task| {
+                                task.turn_context.history_mode == ThreadHistoryMode::PanngV1
+                            });
+                            let order = if panng {
+                                None
+                            } else {
+                                Some(self.reserve_user_input_order().await)
+                            };
+                            Some((sender, order))
+                        }
                         None => None,
                     }
                 }
@@ -4507,6 +4612,15 @@ impl Session {
 
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) -> bool {
+        if self
+            .services
+            .thread_extension_data
+            .get::<panng_bootstrap::Bootstrap>()
+            .is_some()
+        {
+            error!("Panng live publication is not wired; refusing native rollout append");
+            return false;
+        }
         if let Some(live_thread) = self.live_thread()
             && let Err(e) = live_thread.append_items(items).await
         {

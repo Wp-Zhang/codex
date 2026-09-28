@@ -397,6 +397,14 @@ mod job {
     pub(super) fn serialize_filtered_rollout_response_items(
         items: &[RolloutItem],
     ) -> codex_protocol::error::Result<String> {
+        if items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::PanngCommit(_)))
+        {
+            return Err(CodexErr::InvalidRequest(
+                "Panng memory extraction requires a strict provenance-aware reader".into(),
+            ));
+        }
         let filtered = items
             .iter()
             .filter_map(|item| match item {
@@ -404,7 +412,8 @@ mod job {
                 RolloutItem::InterAgentCommunication(communication) => {
                     Some(communication.to_model_input_item())
                 }
-                RolloutItem::SessionMeta(_)
+                RolloutItem::PanngCommit(_)
+                | RolloutItem::SessionMeta(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)

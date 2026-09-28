@@ -45,25 +45,6 @@ pub struct RecoveredPanngSuffix {
 }
 
 #[derive(Deserialize)]
-struct Header {
-    #[serde(rename = "type")]
-    kind: String,
-    ordinal: u64,
-    payload: HeaderPayload,
-}
-#[derive(Deserialize)]
-struct HeaderPayload {
-    id: ThreadId,
-    history_mode: String,
-    panng: HeaderVersion,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct HeaderVersion {
-    version: u32,
-    branch: BranchId,
-}
-#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CommitLine {
     #[serde(rename = "type")]
@@ -79,7 +60,30 @@ struct CommitLine {
 /// checkpoint (16 MiB plus envelope allowance) are independently read and validated.
 /// An unterminated final fragment is reported, never repaired. A complete corrupt record is fatal.
 /// Callers must fence old execution before using this state to begin a new session.
-pub fn read_panng_suffix(mut reader: impl Read + Seek) -> io::Result<RecoveredPanngSuffix> {
+pub fn read_panng_suffix(reader: impl Read + Seek) -> io::Result<RecoveredPanngSuffix> {
+    read_prefix(reader, None)
+}
+
+/// Reconstruct a previously frozen complete prefix; this validates a cut, not a new durability ACK.
+pub fn read_panng_prefix(
+    reader: impl Read + Seek,
+    cut: codex_protocol::protocol::HistoryPosition,
+) -> io::Result<RecoveredPanngSuffix> {
+    let recovered = read_prefix(reader, Some(cut))?;
+    if recovered.thread_id != cut.thread_id
+        || recovered.torn_tail_bytes != 0
+        || recovered.cut.ordinal.checked_add(1) != Some(cut.end_ordinal_exclusive)
+        || recovered.cut.end_byte_offset != cut.end_byte_offset
+    {
+        return Err(invalid("Panng frozen prefix does not match its exact cut"));
+    }
+    Ok(recovered)
+}
+
+fn read_prefix(
+    mut reader: impl Read + Seek,
+    cut: Option<codex_protocol::protocol::HistoryPosition>,
+) -> io::Result<RecoveredPanngSuffix> {
     reader.seek(SeekFrom::Start(0))?;
     let mut prefix = Vec::new();
     reader
@@ -93,15 +97,9 @@ pub fn read_panng_suffix(mut reader: impl Read + Seek) -> io::Result<RecoveredPa
         .filter(|end| *end <= MAX_PANNG_HEADER_BYTES)
         .ok_or_else(|| invalid("missing, torn or oversized Panng header"))?;
     prefix.truncate(header_end);
-    let header: Header = serde_json::from_slice(&prefix).map_err(invalid)?;
-    if header.kind != "session_meta"
-        || header.ordinal != 0
-        || header.payload.history_mode != "panng_v1"
-        || header.payload.panng.version != 1
-    {
-        return Err(invalid("unsupported Panng header or initial ordinal"));
-    }
-    let branch = header.payload.panng.branch;
+    let header = codex_history::PanngSessionHeader::from_slice(&prefix).map_err(invalid)?;
+    let branch = header.branch().clone();
+    let thread_id = header.session_meta().meta.id;
     reader.seek(SeekFrom::Start(header_end as u64))?;
     let mut initial_bytes = Vec::new();
     io::BufReader::new(reader.by_ref())
@@ -112,7 +110,7 @@ pub fn read_panng_suffix(mut reader: impl Read + Seek) -> io::Result<RecoveredPa
             "missing, torn or oversized initial Panng checkpoint",
         ));
     }
-    let initial = decode_commit(&initial_bytes, &branch, header.payload.id)?;
+    let initial = decode_commit(&initial_bytes, &branch, thread_id)?;
     if initial.ordinal != 1
         || initial.payload.sequence() != 0
         || !initial.payload.is_checkpoint()
@@ -133,10 +131,26 @@ pub fn read_panng_suffix(mut reader: impl Read + Seek) -> io::Result<RecoveredPa
             .snapshot_state()
             .ok_or_else(|| invalid("missing initial runtime checkpoint"))?,
     )?;
+    let parent_cut = initial
+        .payload
+        .checkpoint()
+        .and_then(|checkpoint| checkpoint.parent_cut);
+    if parent_cut != header.session_meta().meta.history_base {
+        return Err(invalid(
+            "Panng fork checkpoint and header parent cut differ",
+        ));
+    }
+    if cut.is_some_and(|cut| cut.end_byte_offset < header_end as u64 + initial_bytes.len() as u64) {
+        return Err(invalid("Panng fork cut must include the root checkpoint"));
+    }
     let initial_commit_id = initial.payload.commit_id().clone();
     drop(initial_bytes);
     drop(initial);
-    let end = reader.seek(SeekFrom::End(0))?;
+    let file_end = reader.seek(SeekFrom::End(0))?;
+    let end = cut.map_or(file_end, |cut| cut.end_byte_offset);
+    if end > file_end {
+        return Err(invalid("Panng frozen cut exceeds its source file"));
+    }
     let mut scanner = StrictJsonlScanner::new_at(reader, end)?;
     let mut records = Vec::new();
     let mut ids = BTreeSet::new();
@@ -154,7 +168,7 @@ pub fn read_panng_suffix(mut reader: impl Read + Seek) -> io::Result<RecoveredPa
         if raw.start < header_end as u64 {
             return Err(invalid("Panng initialization lacks a complete checkpoint"));
         }
-        let line = decode_commit(&raw.bytes, &branch, header.payload.id)?;
+        let line = decode_commit(&raw.bytes, &branch, thread_id)?;
         if (raw.start != header_end as u64 && line.payload.commit_id() == &initial_commit_id)
             || !ids.insert(line.payload.commit_id().clone())
         {
@@ -209,7 +223,7 @@ pub fn read_panng_suffix(mut reader: impl Read + Seek) -> io::Result<RecoveredPa
     }
     Ok(RecoveredPanngSuffix {
         header_bytes: prefix,
-        thread_id: header.payload.id,
+        thread_id,
         initial_commit_id,
         branch,
         runtime,
@@ -230,26 +244,28 @@ fn decode_commit(bytes: &[u8], branch: &BranchId, thread_id: ThreadId) -> io::Re
     {
         return Err(invalid("invalid Panng outer record or branch"));
     }
-    validate_thread_settings(&line.payload, thread_id)?;
+    validate_host_ownership(&line.payload, thread_id)?;
     Ok(line)
 }
 
-pub(crate) fn validate_thread_settings(
-    commit: &PanngCommit,
-    thread_id: ThreadId,
-) -> io::Result<()> {
+pub(crate) fn validate_host_ownership(commit: &PanngCommit, thread_id: ThreadId) -> io::Result<()> {
     let companions = commit
         .checkpoint()
         .into_iter()
         .flat_map(|checkpoint| &checkpoint.companions);
     for item in commit.host_effects().iter().chain(companions) {
-        if let codex_history::RolloutItem::EventMsg(
-            codex_protocol::protocol::EventMsg::ThreadSettingsApplied(settings),
-        ) = item
-            && settings.thread_id != Some(thread_id)
-        {
+        let owner = match item {
+            codex_history::RolloutItem::EventMsg(
+                codex_protocol::protocol::EventMsg::ThreadSettingsApplied(settings),
+            ) => Some(settings.thread_id),
+            codex_history::RolloutItem::EventMsg(
+                codex_protocol::protocol::EventMsg::ItemCompleted(event),
+            ) => Some(Some(event.thread_id)),
+            _ => None,
+        };
+        if owner.is_some_and(|owner| owner != Some(thread_id)) {
             return Err(invalid(
-                "Panng thread settings do not belong to header thread",
+                "Panng host effect does not belong to header thread",
             ));
         }
     }

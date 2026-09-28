@@ -1343,7 +1343,7 @@ async fn start_thread(
         {
             Ok(response) => return Ok(response),
             Err(TypedRequestError::Server { source, .. })
-                if params.history_mode.is_some()
+                if params.history_mode == Some(ThreadHistoryMode::Paginated)
                     && source.code == -32600
                     && source.message
                         == "paginated threads require thread/turns/list and thread/items/list support" =>
@@ -1377,7 +1377,11 @@ fn thread_start_params_from_config(
         permissions,
         config: thread_config_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
-        history_mode: (!config.ephemeral).then_some(ThreadHistoryMode::Paginated),
+        history_mode: (!config.ephemeral).then_some(if config.experimental_panng {
+            ThreadHistoryMode::PanngV1
+        } else {
+            ThreadHistoryMode::Paginated
+        }),
         thread_source: Some(thread_source.clone()),
         ..ThreadStartParams::default()
     }

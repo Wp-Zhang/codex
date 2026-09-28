@@ -33,21 +33,50 @@ pub struct PreviousTurnSettings {
 
 /// Returns the runtime version stored in a turn context or compaction resume metadata.
 pub fn resume_multi_agent_version(item: &RolloutItem) -> Option<MultiAgentVersion> {
+    if let Some(version) = panng_resume_multi_agent_version(item) {
+        return version;
+    }
+    crate::host_replay_items(std::slice::from_ref(item))
+        .rev()
+        .find_map(resume_multi_agent_version_from_replay)
+}
+
+pub(crate) fn resume_multi_agent_version_from_replay(
+    item: crate::HostReplayItem<'_>,
+) -> Option<MultiAgentVersion> {
     match item {
-        RolloutItem::TurnContext(context) => context.multi_agent_version,
-        RolloutItem::Compacted(compacted) => compacted
+        crate::HostReplayItem::Item(RolloutItem::TurnContext(context)) => {
+            context.multi_agent_version
+        }
+        crate::HostReplayItem::Compacted(compacted) => compacted
             .resume_metadata
             .as_ref()
             .and_then(|metadata| metadata.multi_agent_version),
-        RolloutItem::SessionMeta(_)
-        | RolloutItem::ResponseItem(_)
-        | RolloutItem::InterAgentCommunication(_)
-        | RolloutItem::InterAgentCommunicationMetadata { .. }
-        | RolloutItem::TokenUsageRecord(_)
-        | RolloutItem::WorldState(_)
-        | RolloutItem::RetainedContext(_)
-        | RolloutItem::SecurityRiskScore(_)
-        | RolloutItem::RealtimeItem(_)
-        | RolloutItem::EventMsg(_) => None,
+        crate::HostReplayItem::Item(_) => None,
     }
+}
+
+/// The outer Option distinguishes an authoritative clear from no Panng selection.
+/// A checkpoint's frozen reference context may predate its selected runtime.
+pub(crate) fn panng_resume_multi_agent_version(
+    item: &RolloutItem,
+) -> Option<Option<MultiAgentVersion>> {
+    let RolloutItem::PanngCommit(commit) = item else {
+        return None;
+    };
+    if let Some(checkpoint) = commit.checkpoint() {
+        return checkpoint
+            .compacted
+            .resume_metadata
+            .as_ref()
+            .map(|metadata| metadata.multi_agent_version);
+    }
+    commit
+        .host_effects()
+        .iter()
+        .rev()
+        .find_map(|effect| match effect {
+            RolloutItem::TurnContext(context) => context.multi_agent_version.map(Some),
+            _ => None,
+        })
 }

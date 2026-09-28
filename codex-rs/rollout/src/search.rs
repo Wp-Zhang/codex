@@ -272,6 +272,15 @@ fn content_match_snippet(jsonl_line: &str, search_term: &Regex) -> Option<String
 
 fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
     match item {
+        RolloutItem::PanngCommit(commit) => {
+            let text = commit
+                .host_effects()
+                .iter()
+                .filter_map(conversation_text_from_item)
+                .collect::<Vec<_>>()
+                .join(" ");
+            (!text.is_empty()).then_some(text)
+        }
         RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
             let text = strip_user_message_prefix(user.message.as_str());
             if text.is_empty() {

@@ -266,6 +266,7 @@ fn project(item: RolloutItem) -> ThreadHistoryChangeSet {
         ordinal: Some(7),
         item,
     })
+    .expect("valid native projection")
 }
 
 fn item_completed(thread_id: ThreadId, turn_id: &str, item: TurnItem) -> RolloutItem {
@@ -277,3 +278,6 @@ fn item_completed(thread_id: ThreadId, turn_id: &str, item: TurnItem) -> Rollout
         completed_at_ms: 123,
     }))
 }
+
+#[path = "panng_projection_tests.rs"]
+mod panng;

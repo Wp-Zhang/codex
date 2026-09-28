@@ -317,6 +317,9 @@ pub(crate) async fn handle_output_item_done(
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
+    if let Some(pool) = ctx.turn_store.get::<crate::panng::execution::DurablePool>() {
+        return crate::panng::stream::handle_completed(ctx, pool.as_ref(), item).await;
+    }
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.step_context.turn.mode() == ModeKind::Plan;
 

@@ -44,6 +44,9 @@ impl SessionTask for RegularTask {
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
+        if ctx.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+            return crate::panng::turn::run_panng_turn(sess, ctx, input, cancellation_token).await;
+        }
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.

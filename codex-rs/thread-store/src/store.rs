@@ -105,6 +105,65 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Creates a new live thread.
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()>;
 
+    /// Opt-in storage experiment only; remote/custom stores must implement the complete contract.
+    fn experimental_panng_capability(&self) -> crate::ExperimentalPanngCapability {
+        crate::ExperimentalPanngCapability::Unsupported
+    }
+    fn experimental_panng_create(
+        &self,
+        _params: CreateThreadParams,
+        _initial: codex_rollout::PanngCommit,
+    ) -> ThreadStoreFuture<'_, crate::DurableRecordPosition> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "experimental_panng_create",
+            })
+        })
+    }
+    fn experimental_panng_resume(
+        &self,
+        _params: ResumeThreadParams,
+        _branch: codex_rollout::BranchId,
+    ) -> ThreadStoreFuture<'_, codex_rollout::RecoveredPanngSuffix> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "experimental_panng_resume",
+            })
+        })
+    }
+    fn experimental_panng_append(
+        &self,
+        _thread_id: ThreadId,
+        _commit: codex_rollout::PanngCommit,
+    ) -> ThreadStoreFuture<'_, crate::DurableRecordPosition> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "experimental_panng_append",
+            })
+        })
+    }
+    fn experimental_panng_reconcile(
+        &self,
+        _thread_id: ThreadId,
+        _commit: codex_rollout::PanngCommit,
+    ) -> ThreadStoreFuture<'_, crate::ExperimentalPanngReconcile> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "experimental_panng_reconcile",
+            })
+        })
+    }
+    fn experimental_panng_read(
+        &self,
+        _thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, codex_rollout::RecoveredPanngSuffix> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "experimental_panng_read",
+            })
+        })
+    }
+
     /// Stages host-owned metadata for a thread ID reserved before Core starts the thread.
     ///
     /// The entry remains in memory until the first successful metadata update for that thread.

@@ -1,6 +1,11 @@
 //! Opt-in experiment restricted to the host-provided panng_probe test tool.
 //! This is not a durable executor and is intentionally absent from CLI/config registration.
 
+pub(crate) mod execution;
+pub(crate) mod host_replay;
+pub(crate) mod stream;
+pub(crate) mod turn;
+
 use crate::context::ContextualUserFragment;
 use crate::context::PanngCompletion;
 use crate::session::session::Session;

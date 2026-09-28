@@ -135,7 +135,10 @@ impl LocalThreadStore {
                     "source rollout belongs to another thread",
                 ));
             }
-            if meta.meta.history_mode != ThreadHistoryMode::Paginated {
+            if !matches!(
+                meta.meta.history_mode,
+                ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1
+            ) {
                 return Err(malformed_lineage(
                     requested_thread_id,
                     "source rollout is not paginated",
@@ -144,7 +147,9 @@ impl LocalThreadStore {
             let rollout_path = match representation {
                 LineageRepresentation::Existing => rollout_path,
                 LineageRepresentation::PlainForReference
-                    if next_rollout_id.is_none() && meta.meta.history_base.is_none() =>
+                    if next_rollout_id.is_none()
+                        && meta.meta.history_base.is_none()
+                        && meta.meta.history_mode == ThreadHistoryMode::Paginated =>
                 {
                     // A newly shared standalone source must remain readable by older binaries.
                     codex_rollout::materialize_rollout_for_reference(rollout_path.as_path())
@@ -165,6 +170,7 @@ impl LocalThreadStore {
                 validate_cutoff_bounds(requested_thread_id, rollout_path.as_path(), &end).await?;
             }
             let start_ordinal = match meta.meta.history_base {
+                _ if meta.meta.history_mode == ThreadHistoryMode::PanngV1 => 1,
                 Some(base) => base.end_ordinal_exclusive.checked_add(1).ok_or_else(|| {
                     malformed_lineage(requested_thread_id, "source ordinal overflow")
                 })?,

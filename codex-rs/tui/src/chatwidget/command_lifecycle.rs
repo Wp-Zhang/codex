@@ -350,7 +350,11 @@ impl ChatWidget {
             .into_iter()
             .map(codex_app_server_protocol::CommandAction::into_core)
             .collect();
-        let duration = Duration::from_millis(duration_ms.unwrap_or_default().max(0) as u64);
+        let unconfirmed = status == codex_app_server_protocol::CommandExecutionStatus::Failed
+            && exit_code.is_none();
+        let reported_duration =
+            duration_ms.map(|millis| Duration::from_millis(millis.max(0) as u64));
+        let duration = reported_duration.unwrap_or_default();
         let exit_code = if status == codex_app_server_protocol::CommandExecutionStatus::Completed {
             exit_code.unwrap_or_default()
         } else {
@@ -414,6 +418,12 @@ impl ChatWidget {
             CommandOutput::new(exit_code, String::new())
         } else {
             CommandOutput::new(exit_code, aggregated_output)
+        };
+
+        let output = if unconfirmed {
+            output.with_unconfirmed_exit(reported_duration)
+        } else {
+            output
         };
 
         match end_target {

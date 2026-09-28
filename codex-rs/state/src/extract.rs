@@ -1,5 +1,7 @@
 use crate::model::ThreadMetadata;
+use codex_history::HostReplayItem;
 use codex_history::RolloutItem;
+use codex_history::host_replay_items;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -31,6 +33,17 @@ pub fn apply_rollout_item(
     default_provider: &str,
 ) {
     match item {
+        RolloutItem::PanngCommit(_) => {
+            for effect in host_replay_items(std::slice::from_ref(item)) {
+                match effect {
+                    HostReplayItem::Item(item) => {
+                        apply_rollout_item(metadata, item, default_provider)
+                    }
+                    // Compaction context is not a fresh metadata update in the native path.
+                    HostReplayItem::Compacted(_) => {}
+                }
+            }
+        }
         RolloutItem::SessionMeta(meta_line) => apply_session_meta_from_item(metadata, meta_line),
         RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
@@ -51,6 +64,12 @@ pub fn apply_rollout_item(
 /// Return whether this rollout item can mutate thread metadata stored in SQLite.
 pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
     match item {
+        RolloutItem::PanngCommit(_) => {
+            host_replay_items(std::slice::from_ref(item)).any(|effect| match effect {
+                HostReplayItem::Item(item) => rollout_item_affects_thread_metadata(item),
+                HostReplayItem::Compacted(_) => false,
+            })
+        }
         RolloutItem::SessionMeta(_) | RolloutItem::TurnContext(_) => true,
         RolloutItem::EventMsg(
             EventMsg::TokenCount(_)
@@ -848,3 +867,7 @@ mod tests {
         assert_eq!(diffs, vec!["title", "tokens_used"]);
     }
 }
+
+#[cfg(test)]
+#[path = "extract_panng_tests.rs"]
+mod panng_tests;

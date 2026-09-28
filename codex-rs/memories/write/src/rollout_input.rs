@@ -39,13 +39,20 @@ pub(crate) fn serialize_tiered_input(
     items: &[RolloutItem],
     token_limit: usize,
 ) -> anyhow::Result<String> {
+    if items
+        .iter()
+        .any(|item| matches!(item, RolloutItem::PanngCommit(_)))
+    {
+        anyhow::bail!("Panng memory extraction requires a strict provenance-aware reader");
+    }
     let mut rows = Vec::new();
     let mut user_input_calls = HashMap::new();
     for item in items {
         let item = match item {
             RolloutItem::ResponseItem(item) => sanitize_response_item_for_memories(&item.item),
             RolloutItem::InterAgentCommunication(message) => Some(message.to_model_input_item()),
-            RolloutItem::SessionMeta(_)
+            RolloutItem::PanngCommit(_)
+            | RolloutItem::SessionMeta(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::Compacted(_)
             | RolloutItem::TurnContext(_)

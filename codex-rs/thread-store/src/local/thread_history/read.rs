@@ -39,6 +39,8 @@ pub(super) enum CursorScope {
 #[serde(rename_all = "camelCase")]
 pub(super) struct HistoryCursor {
     pub requested_thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_id: Option<ThreadId>,
     pub rollout_ordinal: u64,
     pub include_anchor: bool,
     pub scope: CursorScope,
@@ -47,6 +49,7 @@ pub(super) struct HistoryCursor {
 #[derive(Clone, Copy)]
 pub(super) struct RolloutHistoryPosition {
     pub rollout_ordinal: i64,
+    pub rollout_id: Option<ThreadId>,
 }
 
 pub(super) struct StoredTurnRow {
@@ -102,6 +105,11 @@ pub(in crate::local) async fn list_turns(
     store: &LocalThreadStore,
     params: ListTurnsParams,
 ) -> ThreadStoreResult<TurnPage> {
+    let _guard = if super::super::panng_projection::is_panng(store, params.thread_id).await? {
+        Some(store.live_writer_locks.lock(params.thread_id).await)
+    } else {
+        None
+    };
     validate_thread_for_paginated_reads(
         store,
         params.thread_id,
@@ -110,56 +118,76 @@ pub(in crate::local) async fn list_turns(
     )
     .await?;
     validate_page_size(params.page_size)?;
-    let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
-    let pool = store.thread_history_db().await?;
-    let page = page_turn_rows(
-        pool,
+    let (lineage, cold_writer) = super::super::panng_projection::paging_lineage_locked(
+        store,
         params.thread_id,
-        &lineage,
-        params.cursor.as_deref(),
-        params.page_size,
-        params.sort_direction,
-        params.items_view,
+        params.include_archived,
     )
     .await?;
-    let mut turns = Vec::with_capacity(page.rows.len());
-    for turn in page.rows {
-        let items = match params.items_view {
-            StoredTurnItemsView::NotLoaded => Vec::new(),
-            StoredTurnItemsView::Summary
-                if matches!(turn.status, StoredTurnStatus::Interrupted)
-                    && turn.first_user_item_id.is_none()
-                    && turn.final_agent_item_id.is_none() =>
-            {
-                // Synthetic fork-boundary rows are interrupted without local summary IDs.
-                // Load their summary from the earliest visible source turn.
-                load_inherited_summary_items(pool, &lineage, &turn).await?
-            }
-            StoredTurnItemsView::Summary => turn.summary_items,
-        };
-        turns.push(StoredTurn {
-            turn_id: turn.turn_id,
-            items,
-            items_view: params.items_view,
-            status: turn.status,
-            error: turn.error,
-            started_at: turn.started_at,
-            completed_at: turn.completed_at,
-            duration_ms: turn.duration_ms,
-        });
-    }
+    let result = async {
+        let pool = store.thread_history_db().await?;
+        let page = page_turn_rows(
+            pool,
+            params.thread_id,
+            &lineage,
+            params.cursor.as_deref(),
+            params.page_size,
+            params.sort_direction,
+            params.items_view,
+        )
+        .await?;
+        let mut turns = Vec::with_capacity(page.rows.len());
+        for turn in page.rows {
+            let items = match params.items_view {
+                StoredTurnItemsView::NotLoaded => Vec::new(),
+                StoredTurnItemsView::Summary
+                    if matches!(turn.status, StoredTurnStatus::Interrupted)
+                        && turn.first_user_item_id.is_none()
+                        && turn.final_agent_item_id.is_none() =>
+                {
+                    // Synthetic fork-boundary rows are interrupted without local summary IDs.
+                    // Load their summary from the earliest visible source turn.
+                    load_inherited_summary_items(pool, &lineage, &turn).await?
+                }
+                StoredTurnItemsView::Summary => turn.summary_items,
+            };
+            turns.push(StoredTurn {
+                turn_id: turn.turn_id,
+                items,
+                items_view: params.items_view,
+                status: turn.status,
+                error: turn.error,
+                started_at: turn.started_at,
+                completed_at: turn.completed_at,
+                duration_ms: turn.duration_ms,
+            });
+        }
 
-    Ok(TurnPage {
-        turns,
-        next_cursor: page.next_cursor,
-        backwards_cursor: page.backwards_cursor,
-    })
+        Ok(TurnPage {
+            turns,
+            next_cursor: page.next_cursor,
+            backwards_cursor: page.backwards_cursor,
+        })
+    }
+    .await;
+    if let Some(writer) = cold_writer {
+        writer
+            .shutdown()
+            .await
+            .map_err(super::thread_history_error)?;
+    }
+    result
 }
 
 pub(in crate::local) async fn list_items(
     store: &LocalThreadStore,
     params: ListItemsParams,
 ) -> ThreadStoreResult<ItemPage> {
+    let _guard = if super::super::panng_projection::is_panng(store, params.thread_id).await? {
+        Some(store.live_writer_locks.lock(params.thread_id).await)
+    } else {
+        None
+    };
     validate_thread_for_paginated_reads(
         store,
         params.thread_id,
@@ -168,15 +196,30 @@ pub(in crate::local) async fn list_items(
     )
     .await?;
     validate_page_size(params.page_size)?;
-    let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
-    let pool = store.thread_history_db().await?;
-    let page = page_item_rows(pool, &lineage, &params).await?;
+    let (lineage, cold_writer) = super::super::panng_projection::paging_lineage_locked(
+        store,
+        params.thread_id,
+        params.include_archived,
+    )
+    .await?;
+    let result = async {
+        let pool = store.thread_history_db().await?;
+        let page = page_item_rows(pool, &lineage, &params).await?;
 
-    Ok(ItemPage {
-        items: page.rows.into_iter().map(|row| row.item).collect(),
-        next_cursor: page.next_cursor,
-        backwards_cursor: page.backwards_cursor,
-    })
+        Ok(ItemPage {
+            items: page.rows.into_iter().map(|row| row.item).collect(),
+            next_cursor: page.next_cursor,
+            backwards_cursor: page.backwards_cursor,
+        })
+    }
+    .await;
+    if let Some(writer) = cold_writer {
+        writer
+            .shutdown()
+            .await
+            .map_err(super::thread_history_error)?;
+    }
+    result
 }
 
 pub(super) async fn validate_thread_for_paginated_reads(
@@ -188,6 +231,26 @@ pub(super) async fn validate_thread_for_paginated_reads(
     let Some(state_db) = store.state_db().await else {
         return Err(ThreadStoreError::Unsupported { operation });
     };
+    // A live marked writer is canonical evidence of mode even when the rebuildable
+    // metadata row was lost. Do not permanently block projection repair on that row.
+    if let Some(entry) = store.live_recorders.lock().await.get(&thread_id)
+        && entry.history_mode == ThreadHistoryMode::PanngV1
+    {
+        if !matches!(operation, "list_turns" | "list_items") {
+            return Err(ThreadStoreError::Unsupported { operation });
+        }
+        if !include_archived
+            && super::super::helpers::rollout_path_is_archived(
+                &store.config.codex_home,
+                entry.recorder.rollout_path(),
+            )
+        {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!("thread {thread_id} is archived"),
+            });
+        }
+        return Ok(());
+    }
     let Some(metadata) =
         state_db
             .get_thread(thread_id)
@@ -196,6 +259,19 @@ pub(super) async fn validate_thread_for_paginated_reads(
                 message: format!("failed to read thread metadata: {err}"),
             })?
     else {
+        if matches!(operation, "list_turns" | "list_items")
+            && let Ok(Some((path, _))) =
+                super::super::panng_projection::header(store, thread_id).await
+        {
+            if !include_archived
+                && super::super::helpers::rollout_path_is_archived(&store.config.codex_home, &path)
+            {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: format!("thread {thread_id} is archived"),
+                });
+            }
+            return Ok(());
+        }
         return Err(ThreadStoreError::Unsupported { operation });
     };
     if metadata.archived_at.is_some() && !include_archived {
@@ -205,7 +281,10 @@ pub(super) async fn validate_thread_for_paginated_reads(
     }
     match metadata.history_mode {
         ThreadHistoryMode::Legacy => Err(ThreadStoreError::Unsupported { operation }),
-        ThreadHistoryMode::Paginated => Ok(()),
+        ThreadHistoryMode::PanngV1 if !matches!(operation, "list_turns" | "list_items") => {
+            Err(ThreadStoreError::Unsupported { operation })
+        }
+        ThreadHistoryMode::PanngV1 | ThreadHistoryMode::Paginated => Ok(()),
     }
 }
 
@@ -273,11 +352,13 @@ pub(super) fn serialize_cursor(
     scope: CursorScope,
     rollout_ordinal: i64,
     include_anchor: bool,
+    rollout_id: Option<ThreadId>,
 ) -> ThreadStoreResult<String> {
     let rollout_ordinal =
         u64::try_from(rollout_ordinal).map_err(|_| invalid_cursor("negative rollout ordinal"))?;
     serde_json::to_string(&HistoryCursor {
         requested_thread_id,
+        rollout_id,
         rollout_ordinal,
         include_anchor,
         scope,
@@ -306,6 +387,7 @@ pub(super) fn stored_turn_row(row: sqlx::sqlite::SqliteRow) -> ThreadStoreResult
     Ok(StoredTurnRow {
         position: RolloutHistoryPosition {
             rollout_ordinal: row.try_get("rollout_ordinal")?,
+            rollout_id: None,
         },
         turn_id: row.try_get("turn_id")?,
         status,
@@ -401,7 +483,10 @@ pub(super) fn stored_thread_item_row(
         });
     }
     Ok(StoredThreadItemRow {
-        position: RolloutHistoryPosition { rollout_ordinal },
+        position: RolloutHistoryPosition {
+            rollout_ordinal,
+            rollout_id: None,
+        },
         item: stored_thread_item(row)?,
     })
 }

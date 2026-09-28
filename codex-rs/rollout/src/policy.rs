@@ -9,6 +9,8 @@ use codex_protocol::protocol::ThreadHistoryMode;
 /// Whether a rollout `item` should be persisted in rollout files.
 pub fn is_persisted_rollout_item(item: &RolloutItem, history_mode: ThreadHistoryMode) -> bool {
     match item {
+        // Only the identified strict writer admits atomic commits.
+        RolloutItem::PanngCommit(_) => false,
         RolloutItem::ResponseItem(item) => should_persist_response_item(&item.item),
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => true,

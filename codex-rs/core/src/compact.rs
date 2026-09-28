@@ -362,7 +362,7 @@ async fn run_compact_task_inner_impl(
         // belongs to this compaction turn.
         summary_item.set_turn_id_if_missing(&turn_context.sub_id);
     }
-    let (window_number, window_ids) = sess.advance_auto_compact_window().await;
+    let (window_number, window_ids) = sess.prepare_compaction_window().await;
 
     let (initial_context, world_state_baseline) =
         build_compaction_initial_context(sess.as_ref(), &initial_context_injection).await;
@@ -376,7 +376,7 @@ async fn run_compact_task_inner_impl(
             Some(step_context.to_turn_context_item())
         }
     };
-    sess.replace_compacted_history(
+    sess.replace_compacted_history_checked(
         new_history,
         reference_context_item,
         world_state_baseline,
@@ -389,10 +389,10 @@ async fn run_compact_task_inner_impl(
             reviewer_compaction_hash: None,
         },
     )
-    .await;
+    .await?;
     sess.recompute_token_usage(&turn_context).await;
 
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
+    sess.emit_compaction_completed(&turn_context, compaction_item)
         .await;
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),

@@ -258,7 +258,9 @@ pub(super) async fn resolve_thread_names(
             };
             let name = match history_mode {
                 ThreadHistoryMode::Legacy => distinct_thread_metadata_title(&metadata),
-                ThreadHistoryMode::Paginated => sqlite_thread_name(&metadata),
+                ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1 => {
+                    sqlite_thread_name(&metadata)
+                }
             };
             if let Some(name) = name {
                 if history_mode == ThreadHistoryMode::Legacy

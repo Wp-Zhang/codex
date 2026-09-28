@@ -93,7 +93,10 @@ pub(super) async fn update_thread_metadata(
     } else {
         None
     };
-    let paginated = matches!(history_mode, Some(ThreadHistoryMode::Paginated));
+    let paginated = matches!(
+        history_mode,
+        Some(ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1)
+    );
     let needs_rollout_compat = requires_rollout_compat || patch.name.is_some();
     // Reject competing writers before committing any part of a legacy rollout patch to SQLite.
     let writer_lock = if !paginated
@@ -147,7 +150,7 @@ pub(super) async fn update_thread_metadata(
         .await?;
     }
     if paginated {
-        // Paginated metadata lives in SQLite. Keep the name index update, then stop before the
+        // Paginated and Panng display metadata live in SQLite. Keep the name index update, then stop before the
         // legacy SessionMeta compatibility path below.
         if let Some(name) = patch.name.as_ref()
             && let Err(err) = append_thread_name(
@@ -550,7 +553,7 @@ async fn apply_metadata_update(
                             .update_thread_title(thread_id, name.as_deref().unwrap_or_default())
                             .await
                     }
-                    ThreadHistoryMode::Paginated => {
+                    ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1 => {
                         state_db
                             .update_thread_name(thread_id, name.as_deref())
                             .await

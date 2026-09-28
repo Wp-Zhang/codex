@@ -509,12 +509,21 @@ impl LocalAgentControl {
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
-            parent_thread
+            if let Err(error) = parent_thread
                 .inject_fragment_without_turn(SubagentNotification::new(
                     child_reference.as_str(),
                     status,
                 ))
-                .await;
+                .await
+            {
+                tracing::warn!(%parent_thread_id, %child_thread_id, %error, "failed to deliver subagent notification");
+                parent_thread.session.send_event_raw(Event {
+                    id: String::new(),
+                    msg: EventMsg::Warning(codex_protocol::protocol::WarningEvent {
+                        message: format!("Could not deliver completion notification from agent {child_thread_id}: {error}"),
+                    }),
+                }).await;
+            }
         });
     }
 

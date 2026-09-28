@@ -226,7 +226,10 @@ fn checkpoint_requires_joint_context_and_round_trips_at_one_cut() {
                 snapshot.sequence = 1;
                 snapshot.previous_sequence = Some(0);
             }
-            SnapshotReason::Initial | SnapshotReason::Compaction | SnapshotReason::ReplayBound => {
+            SnapshotReason::Initial
+            | SnapshotReason::Compaction
+            | SnapshotReason::ReplayBound
+            | SnapshotReason::RetireDelivered => {
                 unreachable!()
             }
         }
@@ -298,4 +301,71 @@ fn delta_delivery_must_reference_the_enclosing_commit() {
     invalid.commit_id = CommitId::new("00000000-0000-4000-8000-000000000099".into()).unwrap();
     assert!(PanngCommit::new(invalid.clone()).is_err());
     assert!(PanngCommit::from_slice(&serde_json::to_vec(&invalid).unwrap()).is_err());
+}
+
+#[test]
+fn host_generated_fractional_create_time_keeps_exact_f64_bits_across_canonical_reload() {
+    // Same construction as Session::response_item_create_time, not Number::from_str:
+    // parsing the fixture first can already round away the bit this regression protects.
+    // 1790601806.0000021 previously parsed as 1790601806.000002 without float_roundtrip.
+    let timestamp = f64::from_bits(0x41da_ae9a_9380_0009);
+    let number = serde_json::Number::from_f64(timestamp).unwrap();
+    let mut data = data(RuntimeMutation::delta(Vec::new()).unwrap());
+    let effect = output(number);
+    let expected = serde_json::to_value(&effect).unwrap();
+    data.host_effects.push(effect);
+    let commit =
+        PanngCommit::new(data).expect("valid host timestamp must not be rejected as lost metadata");
+    let bytes = commit.canonical_bytes().unwrap();
+    let recovered = PanngCommit::from_slice(&bytes).unwrap();
+    assert_eq!(recovered.canonical_bytes().unwrap(), bytes);
+    assert_eq!(
+        serde_json::to_value(&recovered.host_effects()[0]).unwrap(),
+        expected
+    );
+    let RolloutItem::ResponseItem(envelope) = &recovered.host_effects()[0] else {
+        panic!("response envelope")
+    };
+    let ResponseItem::FunctionCallOutput {
+        internal_chat_message_metadata_passthrough: Some(metadata),
+        ..
+    } = &envelope.item
+    else {
+        panic!("timestamp metadata")
+    };
+    assert_eq!(
+        metadata
+            .create_time
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .to_bits(),
+        timestamp.to_bits()
+    );
+}
+
+#[test]
+fn provider_reasoning_encryption_and_message_phase_survive_canonical_reload() {
+    let mut data = data(RuntimeMutation::delta(Vec::new()).unwrap());
+    for raw in [
+        json!({"type":"reasoning","id":"reasoning-fixture", "summary":[{"type":"summary_text","text":"provider summary"}],
+            "content":[{"type":"reasoning_text","text":"synthetic fixture"}], "encrypted_content":"opaque-provider-envelope"}),
+        json!({"type":"message","id":"message-fixture","role":"assistant","phase":"final_answer",
+            "content":[{"type":"output_text","text":"visible answer"}]}),
+    ] {
+        let mut item: ResponseItem = serde_json::from_value(raw).unwrap();
+        item.set_create_time_if_missing(
+            serde_json::Number::from_f64(f64::from_bits(0x41da_ae9a_9380_0009)).unwrap(),
+        );
+        data.host_effects
+            .push(RolloutItem::ResponseItem(ResponseItemEnvelope::new(item)));
+    }
+    let expected = serde_json::to_value(&data.host_effects).unwrap();
+    let commit = PanngCommit::new(data).unwrap();
+    let recovered = PanngCommit::from_slice(&commit.canonical_bytes().unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_value(recovered.host_effects()).unwrap(),
+        expected
+    );
 }

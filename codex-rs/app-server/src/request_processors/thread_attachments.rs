@@ -237,6 +237,7 @@ fn thread_attachment_store_error(
             invalid_params(format!("thread not found: {thread_id}"))
         }
         error @ (ThreadStoreError::Conflict { .. }
+        | ThreadStoreError::PanngCreate { .. }
         | ThreadStoreError::SyncedRecord { .. }
         | ThreadStoreError::Internal { .. }) => {
             internal_error(format!("failed to process {operation}: {error}"))

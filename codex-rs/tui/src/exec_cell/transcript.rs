@@ -49,7 +49,9 @@ impl ExecCell {
                     }
                 }
                 if call.duration.is_some() || output.exit_code != 0 {
-                    let mut result: Line = if output.exit_code == 0 {
+                    let mut result: Line = if output.unconfirmed.is_some() {
+                        Line::from(vec!["✗".red().bold(), " (exit unknown)".into()])
+                    } else if output.exit_code == 0 {
                         Line::from("✓".green().bold())
                     } else {
                         Line::from(vec![
@@ -57,7 +59,11 @@ impl ExecCell {
                             format!(" ({})", output.exit_code).into(),
                         ])
                     };
-                    if let Some(duration) = call.duration {
+                    let duration = output
+                        .unconfirmed
+                        .as_ref()
+                        .map_or(call.duration, |details| details.duration);
+                    if let Some(duration) = duration {
                         let duration = format_duration(duration);
                         result.push_span(format!(" • {duration}").dim());
                     }

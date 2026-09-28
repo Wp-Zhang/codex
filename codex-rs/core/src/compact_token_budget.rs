@@ -70,9 +70,9 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    sess.start_new_context_window(step_context, world_state)
-        .await;
-    sess.emit_turn_item_completed(turn_context, compaction_item)
+    sess.start_new_context_window_checked(step_context, world_state)
+        .await?;
+    sess.emit_compaction_completed(turn_context, compaction_item)
         .await;
 
     let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;

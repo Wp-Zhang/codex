@@ -199,6 +199,7 @@ impl Borrow<ResponseItem> for ResponseItemEnvelope {
 /// Persisted rollout item used by core history and rollout storage.
 #[derive(Debug, Clone)]
 pub enum RolloutItem {
+    PanngCommit(Box<PanngCommit>),
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItemEnvelope),
     InterAgentCommunication(InterAgentCommunication),
@@ -412,22 +413,11 @@ impl InitialHistory {
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
             Self::New | Self::Cleared => None,
-            Self::Resumed(resumed) => Some(
-                resumed
-                    .history
-                    .iter()
+            Self::Resumed(_) | Self::Forked(_) => Some(
+                host_replay_items(self.get_rollout_items())
                     .filter_map(|item| match item {
-                        RolloutItem::EventMsg(event) => Some(event.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-            ),
-            Self::Forked(items) => Some(
-                items
-                    .iter()
-                    .filter_map(|item| match item {
-                        RolloutItem::EventMsg(event) => Some(event.clone()),
-                        _ => None,
+                        HostReplayItem::Item(RolloutItem::EventMsg(event)) => Some(event.clone()),
+                        HostReplayItem::Item(_) | HostReplayItem::Compacted(_) => None,
                     })
                     .collect(),
             ),
@@ -548,8 +538,9 @@ fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
 /// Without an owned snapshot, only the latest turn context supplies the initial
 /// selection; a missing field must not resurrect a selection from an older turn.
 pub fn latest_disabled_plugin_ids(items: &[RolloutItem], thread_id: ThreadId) -> Option<&[String]> {
-    if let Some(ids) = items.iter().rev().find_map(|item| {
-        if let RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) = item
+    if let Some(ids) = host_replay_items(items).rev().find_map(|item| {
+        if let HostReplayItem::Item(RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))) =
+            item
             && event.thread_id == Some(thread_id)
         {
             Some(event.thread_settings.disabled_plugin_ids.as_slice())
@@ -559,12 +550,11 @@ pub fn latest_disabled_plugin_ids(items: &[RolloutItem], thread_id: ThreadId) ->
     }) {
         return Some(ids);
     }
-    items
-        .iter()
+    host_replay_items(items)
         .rev()
         .find_map(|item| match item {
-            RolloutItem::TurnContext(context) => Some(context),
-            _ => None,
+            HostReplayItem::Item(RolloutItem::TurnContext(context)) => Some(context),
+            HostReplayItem::Item(_) | HostReplayItem::Compacted(_) => None,
         })
         .and_then(|context| context.disabled_plugin_ids.as_deref())
 }
@@ -573,8 +563,17 @@ fn multi_agent_version_from_items(
     items: &[RolloutItem],
     thread_id: Option<ThreadId>,
 ) -> Option<MultiAgentVersion> {
-    let session_meta_version = items.iter().rev().find_map(|item| match item {
-        RolloutItem::SessionMeta(meta_line)
+    // Panng checkpoints are self-contained authorities, including explicit absence.
+    // Keep native header-first lookup unchanged when no outer commit selects a value.
+    if let Some(version) = items
+        .iter()
+        .rev()
+        .find_map(compaction_resume_metadata::panng_resume_multi_agent_version)
+    {
+        return version;
+    }
+    let session_meta_version = host_replay_items(items).rev().find_map(|item| match item {
+        HostReplayItem::Item(RolloutItem::SessionMeta(meta_line))
             if thread_id.is_none_or(|thread_id| meta_line.meta.id == thread_id) =>
         {
             meta_line.meta.multi_agent_version
@@ -582,7 +581,11 @@ fn multi_agent_version_from_items(
         _ => None,
     });
 
-    session_meta_version.or_else(|| items.iter().rev().find_map(resume_multi_agent_version))
+    session_meta_version.or_else(|| {
+        host_replay_items(items)
+            .rev()
+            .find_map(compaction_resume_metadata::resume_multi_agent_version_from_replay)
+    })
 }
 
 #[cfg(test)]
@@ -593,3 +596,10 @@ mod panng;
 pub use panng::PanngCommit;
 pub use panng::PanngCommitData;
 pub use panng::PanngHostCheckpoint;
+
+mod host_replay;
+pub use host_replay::HostReplayItem;
+pub use host_replay::host_replay_items;
+
+mod panng_header;
+pub use panng_header::PanngSessionHeader;

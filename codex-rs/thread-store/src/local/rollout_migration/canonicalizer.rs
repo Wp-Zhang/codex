@@ -113,6 +113,11 @@ impl LegacyRolloutCanonicalizer {
         let timestamp = line.timestamp;
         let bytes_before = self.bytes_written;
         match line.item {
+            RolloutItem::PanngCommit(_) => {
+                return Err(migration_error(
+                    "Panng commits cannot enter legacy migration",
+                ));
+            }
             RolloutItem::SessionMeta(_) => return Ok(0),
             RolloutItem::ResponseItem(response) => {
                 if matches!(&response.item, ResponseItem::Other) {

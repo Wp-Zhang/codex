@@ -792,3 +792,6 @@ async fn worker_compresses_parallel_cold_candidates_without_skipping_other_publi
     assert_eq!(representations, vec![(false, true); paths.len()]);
     Ok(())
 }
+
+#[path = "compression/panng_tests.rs"]
+mod panng;

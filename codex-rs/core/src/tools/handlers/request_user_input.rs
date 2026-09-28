@@ -52,6 +52,7 @@ impl RequestUserInputHandler {
             turn,
             call_id,
             payload,
+            step_context,
             ..
         } = invocation;
 
@@ -132,16 +133,27 @@ impl RequestUserInputHandler {
                 })
                 .collect::<Vec<_>>();
             if !user_input.is_empty() {
-                session
-                    .record_retained_context(RetainedContextEvent::VerifiedAnswer {
-                        answer: VerifiedAnswer {
-                            turn_id: turn.sub_id.clone(),
-                            call_id,
-                            questions: user_input,
-                        },
-                        acceptance_order: Some(accepted.acceptance_order),
-                    })
-                    .await;
+                let mut event = RetainedContextEvent::VerifiedAnswer {
+                    answer: VerifiedAnswer {
+                        turn_id: turn.sub_id.clone(),
+                        call_id,
+                        questions: user_input,
+                    },
+                    acceptance_order: accepted.acceptance_order,
+                };
+                event.bound();
+                if turn.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+                    session
+                        .commit_panng_control_effect(
+                            &turn,
+                            &step_context.settings.model_info,
+                            codex_history::RolloutItem::RetainedContext(event),
+                        )
+                        .await
+                        .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
+                } else {
+                    session.record_retained_context(event).await;
+                }
             }
         }
 

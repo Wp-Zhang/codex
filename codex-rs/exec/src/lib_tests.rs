@@ -897,3 +897,46 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         multi_agent_mode: Default::default(),
     }
 }
+
+#[tokio::test]
+async fn panng_config_opt_in_selects_exec_history() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .cli_overrides(vec![("experimental_panng".into(), true.into())])
+        .build()
+        .await?;
+    let mut native = config.clone();
+    native.experimental_panng = false;
+    let mut expected = thread_start_params_from_config(&native, &ThreadSource::User);
+    assert_eq!(expected.history_mode, Some(ThreadHistoryMode::Paginated));
+    expected.history_mode = Some(ThreadHistoryMode::PanngV1);
+    assert_eq!(
+        thread_start_params_from_config(&config, &ThreadSource::User),
+        expected
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn panng_config_opt_in_rejects_ephemeral_exec() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    let error = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .cli_overrides(vec![("experimental_panng".into(), true.into())])
+        .harness_overrides(ConfigOverrides {
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect_err("Panng must not silently start ephemeral native history");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "experimental_panng requires persistent history and cannot use --ephemeral"
+    );
+    Ok(())
+}

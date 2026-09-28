@@ -385,3 +385,87 @@ fn take_history_cells(
         })
         .collect()
 }
+
+#[tokio::test]
+async fn panng_unconfirmed_command_replays_as_finished_failure_without_exit_code() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    drain_insert_history(&mut rx);
+    // Match the durable fallback emitted when cancellation has no confirmed native result.
+    let item = AppServerThreadItem::CommandExecution {
+        id: "cancelled-command".into(),
+        command: "sleep 30".into(),
+        cwd: chat.config.cwd.clone().into(),
+        process_id: None,
+        plugin_id: None,
+        script_path: None,
+        model_context: None,
+        sandbox_type: None,
+        source: ExecCommandSource::Agent,
+        status: AppServerCommandExecutionStatus::Failed,
+        command_actions: vec![AppServerCommandAction::Unknown {
+            command: "sleep 30".into(),
+        }],
+        aggregated_output: Some("Execution was interrupted before a terminal result was confirmed. The exit code and any side effects are unknown.".into()),
+        exit_code: None,
+        duration_ms: None,
+    };
+    let projected = thread_items_to_transcript_cells(
+        chat.thread_id,
+        &chat.config.cwd,
+        vec![item.clone()],
+        RawReasoningVisibility::Hidden,
+        Some(&chat.config),
+    );
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            items: vec![item],
+            ..app_server_turn(
+                "cancelled-turn",
+                AppServerTurnStatus::Interrupted,
+                /*duration_ms*/ None,
+                /*error*/ None,
+            )
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
+    assert!(chat.running_commands.is_empty());
+    let replayed = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) if cell.as_any().is::<ExecCell>() => Some(cell),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replayed.len(), 1);
+    let mut snapshots = Vec::new();
+    for width in [40, 100] {
+        let render =
+            |cell: &dyn HistoryCell| (cell.display_lines(width), cell.transcript_lines(width));
+        assert_eq!(
+            projected
+                .iter()
+                .map(|cell| render(cell.as_ref()))
+                .collect::<Vec<_>>(),
+            replayed
+                .iter()
+                .map(|cell| render(cell.as_ref()))
+                .collect::<Vec<_>>(),
+        );
+        snapshots.push(format!(
+            "width {width}:\ncompact:\n{}\ndetailed:\n{}",
+            lines_to_single_string(&replayed[0].display_lines(width)),
+            lines_to_single_string(&replayed[0].transcript_lines(width)),
+        ));
+    }
+    let rendered = snapshots.join("\n");
+    assert!(rendered.contains("✗ (exit unknown)"));
+    assert!(!rendered.contains("✗ (1)"));
+    assert!(!rendered.contains(" • 0ms"));
+    assert!(
+        !replayed[0]
+            .as_any()
+            .downcast_ref::<ExecCell>()
+            .unwrap()
+            .is_active()
+    );
+    insta::assert_snapshot!("panng_unconfirmed_command_replay", rendered);
+}

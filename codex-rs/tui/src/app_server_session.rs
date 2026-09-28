@@ -249,7 +249,8 @@ pub(crate) async fn request_thread_start_with_history_fallback(
                 return Ok((response, history_support, task_tools_available));
             }
             Err(TypedRequestError::Server { source, .. })
-                if params.history_mode.is_some() && is_history_pagination_unsupported(&source) =>
+                if params.history_mode == Some(ThreadHistoryMode::Paginated)
+                    && is_history_pagination_unsupported(&source) =>
             {
                 params.history_mode = None;
                 history_support = ThreadHistorySupport::LegacyOnly;
@@ -775,7 +776,9 @@ impl AppServerSession {
             params.approvals_reviewer = selected_profile.approvals_reviewer.map(Into::into);
             remove_permission_config_overrides(&mut params.config);
         }
-        if self.history_support == ThreadHistorySupport::LegacyOnly {
+        if self.history_support == ThreadHistorySupport::LegacyOnly
+            && params.history_mode == Some(ThreadHistoryMode::Paginated)
+        {
             params.history_mode = None;
         }
         self.thread_tool_transport().configure(&mut params);
@@ -916,10 +919,12 @@ impl AppServerSession {
             ForkPresentation::SideConversation => None,
         };
         let exclude_turns = self.history_support == ThreadHistorySupport::Paginated
-            && (fork_parent
-                .as_ref()
-                .is_some_and(|thread| thread.history_mode == ThreadHistoryMode::Paginated)
-                || presentation == ForkPresentation::SideConversation);
+            && (fork_parent.as_ref().is_some_and(|thread| {
+                matches!(
+                    thread.history_mode,
+                    ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1
+                )
+            }) || presentation == ForkPresentation::SideConversation);
         let request_id = self.next_request_id();
         let session_config = if config.model.is_none() {
             // Avoid inferring a tier from the stale client default model.
@@ -2045,7 +2050,11 @@ pub(crate) fn thread_start_params_from_config(
             ThreadParamsMode::Remote => config_request_overrides_from_config(config),
         },
         ephemeral: Some(config.ephemeral),
-        history_mode: (!config.ephemeral).then_some(ThreadHistoryMode::Paginated),
+        history_mode: (!config.ephemeral).then_some(if config.experimental_panng {
+            ThreadHistoryMode::PanngV1
+        } else {
+            ThreadHistoryMode::Paginated
+        }),
         session_start_source,
         thread_source: Some(ThreadSource::User),
         developer_instructions: with_terminal_visualization_instructions(
@@ -2474,6 +2483,10 @@ pub(crate) fn app_server_rate_limit_snapshots(
     }
     snapshots
 }
+
+#[cfg(test)]
+#[path = "app_server_session/panng_opt_in_tests.rs"]
+mod panng_opt_in_tests;
 
 #[cfg(test)]
 #[path = "app_server_session/reasoning_defaults_tests.rs"]

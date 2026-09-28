@@ -92,7 +92,7 @@ pub(crate) async fn load_transcript_preview(
                 inline_visualization_context.as_ref(),
             );
         }
-        ThreadHistoryMode::Paginated => {
+        ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1 => {
             let cwd = thread.cwd.as_path();
             let mut cursor = None;
             let mut seen_cursors = HashSet::new();

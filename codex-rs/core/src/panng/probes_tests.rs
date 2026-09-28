@@ -123,5 +123,11 @@ fn panng_completion_is_context_and_not_user_authorization() {
     };
     assert_eq!(role, "user");
     assert!(content.iter().all(is_contextual_user_fragment));
-    assert!(PanngCompletion::new("b".into(), "x".repeat(769)).is_err());
+    let notice = PanngCompletion::new("b".into(), "x".repeat(769))
+        .unwrap()
+        .body();
+    assert!(notice.len() <= 768);
+    let notice: serde_json::Value = serde_json::from_str(&notice).unwrap();
+    assert_eq!(notice["truncated"], true);
+    assert_eq!(notice["read_tool"], "read_operation_result");
 }

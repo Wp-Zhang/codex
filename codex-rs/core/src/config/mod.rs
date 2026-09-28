@@ -952,6 +952,9 @@ pub struct Config {
     /// When true, session is not persisted on disk. Default to `false`
     pub ephemeral: bool,
 
+    /// Select Panng for new CLI/TUI threads; resumed threads retain their stored mode.
+    pub experimental_panng: bool,
+
     /// Optional extra configuration fields for the thread.
     pub extra_config: Option<ExtraConfig>,
 
@@ -3338,6 +3341,13 @@ impl Config {
             workspace_roots: workspace_roots_override,
         } = overrides;
         let bypass_hook_trust = bypass_hook_trust.unwrap_or_default();
+        let experimental_panng = cfg.experimental_panng.unwrap_or_default();
+        if experimental_panng && ephemeral.unwrap_or_default() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "experimental_panng requires persistent history and cannot use --ephemeral",
+            ));
+        }
 
         if bypass_hook_trust {
             startup_warnings.push(
@@ -4368,6 +4378,7 @@ impl Config {
             application_auth_route_config: None,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
+            experimental_panng,
             extra_config: None,
             bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),

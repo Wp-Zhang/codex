@@ -17,7 +17,7 @@ codex-panng-runtime = { workspace = true }
 codex-protocol = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 uuid = { workspace = true }
 
 [dev-dependencies]

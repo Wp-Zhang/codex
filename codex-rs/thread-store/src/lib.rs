@@ -72,6 +72,8 @@ pub use types::ClearableField;
 pub use types::CreateThreadParams;
 pub use types::DeleteThreadParams;
 pub use types::DeleteThreadsParams;
+pub use types::ExperimentalPanngCapability;
+pub use types::ExperimentalPanngReconcile;
 pub use types::ExtraConfig;
 pub use types::ForkBoundary;
 pub use types::GitInfoPatch;

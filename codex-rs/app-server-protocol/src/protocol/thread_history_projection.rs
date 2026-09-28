@@ -14,12 +14,75 @@ use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 
-/// Project one durable rollout line without reconstructing earlier history.
+/// A commit must fit a single ordinal's pagination and lifecycle semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RolloutProjectionError {
+    #[error("Panng commit contains multiple completed item events")]
+    MultipleCompletedItems,
+    #[error("Panng commit contains multiple turn boundary events")]
+    MultipleTurnBoundaries,
+    #[error("Panng item and turn boundary belong to different turns")]
+    ConflictingTurns,
+}
+
+/// Project one canonical rollout line, rejecting changes that cannot share one ordinal.
 ///
-/// Callers that replay a JSONL suffix should invoke it once per line, in ordinal order, so storage
-/// can preserve the first and latest timestamps for repeated item snapshots independently.
-pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
-    match &line.item {
+/// Snapshots carry recovery state, not newly completed UI items. Callers must propagate errors
+/// before advancing their projection checkpoint; they must not substitute an empty changeset.
+pub fn project_rollout_line(
+    line: &RolloutLine,
+) -> Result<ThreadHistoryChangeSet, RolloutProjectionError> {
+    let RolloutItem::PanngCommit(commit) = &line.item else {
+        return Ok(project_native_item(&line.item));
+    };
+    if commit.is_checkpoint() {
+        return Ok(ThreadHistoryChangeSet::default());
+    }
+    let mut item_turn = None;
+    let mut boundary_turn = None;
+    let mut seen_boundary = false;
+    let mut changes = ThreadHistoryChangeSet::default();
+    for effect in commit.host_effects() {
+        match effect {
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
+                if item_turn.replace(event.turn_id.as_str()).is_some() =>
+            {
+                return Err(RolloutProjectionError::MultipleCompletedItems);
+            }
+            RolloutItem::EventMsg(
+                event @ (EventMsg::TurnStarted(_)
+                | EventMsg::TurnComplete(_)
+                | EventMsg::TurnAborted(_)),
+            ) => {
+                if std::mem::replace(&mut seen_boundary, true) {
+                    return Err(RolloutProjectionError::MultipleTurnBoundaries);
+                }
+                boundary_turn = match event {
+                    EventMsg::TurnStarted(event) => Some(event.turn_id.as_str()),
+                    EventMsg::TurnComplete(event) => Some(event.turn_id.as_str()),
+                    EventMsg::TurnAborted(event) => event.turn_id.as_deref(),
+                    _ => unreachable!("only turn boundary events enter this branch"),
+                };
+            }
+            _ => {}
+        }
+        let native = project_native_item(effect);
+        changes.changed_items.extend(native.changed_items);
+        changes.changed_turns.extend(native.changed_turns);
+        changes.removed_turn_ids.extend(native.removed_turn_ids);
+    }
+    if item_turn
+        .zip(boundary_turn)
+        .is_some_and(|(item, boundary)| item != boundary)
+    {
+        return Err(RolloutProjectionError::ConflictingTurns);
+    }
+    Ok(changes)
+}
+
+/// Original native mapping; validated Panng append effects cannot contain nested commits.
+fn project_native_item(item: &RolloutItem) -> ThreadHistoryChangeSet {
+    match item {
         RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => ThreadHistoryChangeSet {
             changed_turns: vec![ThreadHistoryTurnMetadata {
                 turn_id: event.turn_id.clone(),
@@ -79,6 +142,7 @@ pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
             }],
             ..Default::default()
         },
+        RolloutItem::PanngCommit(_) => unreachable!("outer commits use the fallible dispatcher"),
         RolloutItem::SessionMeta(_)
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)

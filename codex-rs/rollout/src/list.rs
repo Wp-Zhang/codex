@@ -1220,6 +1220,21 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::RealtimeItem(_) => {
                 // Realtime presentation does not affect model-visible thread summaries.
             }
+            RolloutItem::PanngCommit(commit) => {
+                // Only append effects are new summary events; a checkpoint is not new speech.
+                for effect in commit.host_effects() {
+                    if let RolloutItem::EventMsg(event) = effect
+                        && let Some(preview) = event_msg_preview(event)
+                    {
+                        summary.preview.get_or_insert_with(|| preview.clone());
+                        if matches!(event, EventMsg::ItemCompleted(item)
+                            if matches!(item.item, TurnItem::UserMessage(_)))
+                        {
+                            summary.first_user_message.get_or_insert(preview);
+                        }
+                    }
+                }
+            }
             RolloutItem::Compacted(_) => {
                 // Not included in `head`; skip.
             }
@@ -1284,6 +1299,18 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                 RolloutItem::InterAgentCommunication(communication) => {
                     if let Ok(value) = serde_json::to_value(communication.to_model_input_item()) {
                         head.push(value);
+                    }
+                }
+                RolloutItem::PanngCommit(commit) => {
+                    for effect in commit.host_effects() {
+                        if let RolloutItem::ResponseItem(envelope) = effect {
+                            head.push(
+                                serde_json::to_value(&envelope.item).map_err(io::Error::other)?,
+                            );
+                            if head.len() >= HEAD_RECORD_LIMIT {
+                                break;
+                            }
+                        }
                     }
                 }
                 RolloutItem::InterAgentCommunicationMetadata { .. }
@@ -1371,7 +1398,9 @@ pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> 
         };
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => return Ok(session_meta_line),
-            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+            RolloutItem::PanngCommit(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_) => {
                 return Err(io::Error::other(MetadataReadError {
                     reason: "response_before_metadata",
                     error: io::Error::other(format!(

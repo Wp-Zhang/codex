@@ -166,7 +166,7 @@ pub(crate) fn spawn_exit_watcher(
     started_at: Instant,
     network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
     plugin_metrics_sidecar: Option<SharedPluginMetricsSidecar>,
-) {
+) -> tokio::task::JoinHandle<()> {
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.step_context.turn);
     let model_info = Arc::clone(&context.step_context.settings.model_info);
@@ -239,7 +239,7 @@ pub(crate) fn spawn_exit_watcher(
             )
             .await;
         }
-    });
+    })
 }
 
 impl<const MAX_BYTES: usize> Buffer<MAX_BYTES> {

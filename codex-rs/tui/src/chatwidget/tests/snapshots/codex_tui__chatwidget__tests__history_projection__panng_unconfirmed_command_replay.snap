@@ -1,0 +1,30 @@
+---
+source: tui/src/chatwidget/tests/history_projection.rs
+expression: rendered
+---
+width 40:
+compact:
+• Ran sleep 30
+  └ Execution was interrupted before a
+    terminal result was confirmed. The
+    exit code and any side effects are
+    +1 line (ctrl+t to view transcript)
+
+detailed:
+$ sleep 30
+Execution was interrupted before a
+terminal result was confirmed. The exit
+code and any side effects are unknown.
+✗ (exit unknown)
+
+width 100:
+compact:
+• Ran sleep 30
+  └ Execution was interrupted before a terminal result was confirmed. The exit code and any side
+    effects are unknown.
+
+detailed:
+$ sleep 30
+Execution was interrupted before a terminal result was confirmed. The exit code and any side effects
+are unknown.
+✗ (exit unknown)

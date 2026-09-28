@@ -125,6 +125,7 @@ impl PanngCommit {
                     }
                 }
                 let mut seen = [false; 3];
+                let mut previous_slot = None;
                 for item in &checkpoint.companions {
                     let slot = match item {
                         RolloutItem::WorldState(world) if world.full => 0,
@@ -132,6 +133,10 @@ impl PanngCommit {
                         RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(_)) => 2,
                         _ => return Err("invalid Panng checkpoint companion".into()),
                     };
+                    if previous_slot.is_some_and(|previous| previous >= slot) {
+                        return Err("Panng checkpoint companions must follow WorldState, TurnContext, settings order".into());
+                    }
+                    previous_slot = Some(slot);
                     if std::mem::replace(&mut seen[slot], true) {
                         return Err("duplicate Panng checkpoint companion".into());
                     }
@@ -157,6 +162,7 @@ impl PanngCommit {
                                 | EventMsg::TurnAborted(_)
                                 | EventMsg::ThreadSettingsApplied(_)
                                 | EventMsg::ContextCompacted(_)
+                                | EventMsg::PlanUpdate(_)
                         ),
                         _ => false,
                     };

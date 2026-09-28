@@ -167,6 +167,25 @@ impl RolloutRecorder {
         ))
     }
 
+    /// Returns the synchronized canonical position after prior queued commands.
+    /// Strict creation/reopen has already synced the file and ancestors; later commits sync
+    /// before advancing this position. This query does not sync new bytes, acknowledge an old
+    /// attempt for retry, append a ResumeFence, or authorize execution in a recovered epoch.
+    pub async fn panng_durable_position(&self) -> io::Result<SyncedRecord> {
+        if self.mode != RecorderMode::Strict {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "native recorder has no Panng durable position",
+            ));
+        }
+        let (ack, result) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::PanngDurablePosition { ack })
+            .await
+            .map_err(io::Error::other)?;
+        result.await.map_err(io::Error::other)?
+    }
+
     pub async fn append_panng(&self, commit: PanngCommit) -> Result<SyncedRecord, SyncRecordError> {
         if self.mode != RecorderMode::Strict {
             return Err(rejected("native recorder cannot append Panng commits"));
@@ -202,6 +221,16 @@ impl RolloutRecorder {
 }
 
 impl RolloutWriterState {
+    pub(super) fn panng_durable_position(&self) -> io::Result<SyncedRecord> {
+        if self.writer.is_none() {
+            return Err(io::Error::other("strict file is closed"));
+        }
+        self.strict
+            .as_ref()
+            .ok_or_else(|| io::Error::other("not a strict writer"))?
+            .durable_position()
+    }
+
     pub(super) async fn append_panng(
         &mut self,
         commit: PanngCommit,

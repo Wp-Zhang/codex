@@ -900,7 +900,8 @@ fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
             TurnInput::UserInput { content, .. } => Some(content.as_slice()),
             TurnInput::ResponseItem(_)
             | TurnInput::FunctionCallOutput(_)
-            | TurnInput::InterAgentCommunication(_) => None,
+            | TurnInput::InterAgentCommunication(_)
+            | TurnInput::AdditionalContext(_) => None,
         })
         .flatten()
         .cloned()
@@ -1237,7 +1238,8 @@ async fn track_turn_resolved_config_analytics(
                     TurnInput::UserInput { content, .. } => Some(content.as_slice()),
                     TurnInput::ResponseItem(_)
                     | TurnInput::FunctionCallOutput(_)
-                    | TurnInput::InterAgentCommunication(_) => None,
+                    | TurnInput::InterAgentCommunication(_)
+                    | TurnInput::AdditionalContext(_) => None,
                 })
                 .flatten()
                 .filter(|item| {
@@ -1448,7 +1450,7 @@ async fn maybe_run_previous_model_inline_compact(
     skip_all,
     fields(reason = ?reason, phase = ?phase)
 )]
-async fn run_auto_compact(
+pub(crate) async fn run_auto_compact(
     sess: &Arc<Session>,
     step_context: Arc<StepContext>,
     fallback_step_context: Option<Arc<StepContext>>,
@@ -1589,7 +1591,7 @@ pub(crate) fn build_prompt(
         cwd = %step_context.turn.cwd.display()
     )
 )]
-async fn run_sampling_request(
+pub(crate) async fn run_sampling_request(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
@@ -1599,6 +1601,24 @@ async fn run_sampling_request(
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
     let turn_context = Arc::clone(&step_context.turn);
+    if turn_context
+        .extension_data
+        .get::<crate::panng::execution::DurablePool>()
+        .is_some()
+    {
+        let logical_step =
+            codex_panng_runtime::LogicalStepId::new(uuid::Uuid::now_v7().to_string())
+                .map_err(|error| CodexErr::Fatal(error.to_string()))?;
+        let epoch = sess
+            .panng_runtime_snapshot(&turn_context)
+            .await?
+            .execution_epoch()
+            .clone();
+        turn_store.insert(crate::panng::execution::PanngLogicalStep {
+            id: logical_step,
+            epoch,
+        });
+    }
     let preempt = step_context.preempt.clone().unwrap_or_default();
     let _input_watch = if let Some(preempt) = &step_context.preempt {
         sess.input_queue
@@ -1853,9 +1873,9 @@ pub(crate) async fn built_tools(
 }
 
 #[derive(Debug)]
-struct SamplingRequestResult {
-    needs_follow_up: bool,
-    last_agent_message: Option<String>,
+pub(crate) struct SamplingRequestResult {
+    pub(crate) needs_follow_up: bool,
+    pub(crate) last_agent_message: Option<String>,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -2697,7 +2717,21 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                if let Some(state) = plan_mode_state.as_mut()
+                if turn_store
+                    .get::<crate::panng::execution::DurablePool>()
+                    .is_some()
+                    && let Some(state) = plan_mode_state.as_mut()
+                    && raw_assistant_output_text_from_item(&item)
+                        .and_then(|text| extract_proposed_plan_text(&text))
+                        .is_some()
+                {
+                    // Panng records the same parsed plan with its original message after ACK.
+                    state.plan_item_state.completed = true;
+                }
+                if turn_store
+                    .get::<crate::panng::execution::DurablePool>()
+                    .is_none()
+                    && let Some(state) = plan_mode_state.as_mut()
                     && handle_assistant_item_done_in_plan_mode(
                         &sess,
                         &step_context,
@@ -2931,20 +2965,32 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
-                sess.record_observed_response_completed(
-                    &turn_context,
-                    &response_id,
-                    token_usage.as_ref(),
-                    usage_metadata.as_ref(),
-                )
-                .await;
-                let budget_result = sess
-                    .record_token_usage_info(
+                let budget_result = if turn_store
+                    .get::<crate::panng::execution::DurablePool>()
+                    .is_some()
+                {
+                    sess.record_panng_response_completed(
+                        &step_context,
+                        &response_id,
+                        token_usage.as_ref(),
+                        usage_metadata.as_ref(),
+                    )
+                    .await
+                } else {
+                    sess.record_observed_response_completed(
+                        &turn_context,
+                        &response_id,
+                        token_usage.as_ref(),
+                        usage_metadata.as_ref(),
+                    )
+                    .await;
+                    sess.record_token_usage_info(
                         &turn_context,
                         &step_context.settings,
                         token_usage.as_ref(),
                     )
-                    .await;
+                    .await
+                };
                 should_emit_token_count = true;
                 should_emit_turn_diff = true;
                 if let Err(err) = budget_result {
@@ -3124,7 +3170,27 @@ async fn try_run_sampling_request(
     };
     drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
     let mut outcome = outcome;
-    if let Some(pool) = turn_context.extension_data.get::<crate::panng::Pool>() {
+    if let Some(pool) = turn_context
+        .extension_data
+        .get::<crate::panng::execution::DurablePool>()
+    {
+        if outcome.is_ok() && !cancellation_token.is_cancelled() {
+            if pool.advance(&sess, &cancellation_token).await?
+                && let Ok(result) = &mut outcome
+            {
+                result.needs_follow_up = true;
+            }
+        } else if !cancellation_token.is_cancelled()
+            && outcome.as_ref().is_err_and(|error| {
+                matches!(error.details(), CodexErrorDetails::ContextWindowExceeded)
+            })
+        {
+            // The Panng outer loop compacts and retries; keep its finite execution owner open.
+            pool.drain(&sess, &cancellation_token).await?;
+        } else {
+            pool.stop(&sess).await?;
+        }
+    } else if let Some(pool) = turn_context.extension_data.get::<crate::panng::Pool>() {
         if outcome.is_ok() && !cancellation_token.is_cancelled() {
             if pool.advance(&sess, &cancellation_token).await?
                 && let Ok(result) = &mut outcome

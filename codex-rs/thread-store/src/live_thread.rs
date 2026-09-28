@@ -150,6 +150,101 @@ impl LiveThread {
         })
     }
 
+    /// Experimental journal creation; this does not enable an execution engine by itself.
+    pub async fn experimental_panng_create(
+        thread_store: Arc<dyn ThreadStore>,
+        params: CreateThreadParams,
+        initial: codex_rollout::PanngCommit,
+    ) -> ThreadStoreResult<(Self, crate::DurableRecordPosition)> {
+        let thread_id = params.thread_id;
+        let history_mode = params.history_mode;
+        let metadata_sync = ThreadMetadataSync::for_create(&params).await;
+        let receipt = thread_store
+            .experimental_panng_create(params, initial.clone())
+            .await?;
+        let live = Self {
+            thread_id,
+            history_mode,
+            thread_store,
+            metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
+        };
+        live.observe_panng_metadata(initial).await;
+        Ok((live, receipt))
+    }
+
+    pub async fn experimental_panng_resume(
+        thread_store: Arc<dyn ThreadStore>,
+        params: ResumeThreadParams,
+        branch: codex_rollout::BranchId,
+    ) -> ThreadStoreResult<(Self, codex_rollout::RecoveredPanngSuffix)> {
+        let thread_id = params.thread_id;
+        let mut metadata_sync = ThreadMetadataSync::for_resume(&params, None);
+        let recovered = thread_store
+            .experimental_panng_resume(params, branch)
+            .await?;
+        let items = recovered
+            .commits
+            .iter()
+            .cloned()
+            .map(|commit| RolloutItem::PanngCommit(Box::new(commit)))
+            .collect::<Vec<_>>();
+        metadata_sync.record_resume_history(&items);
+        Ok((
+            Self {
+                thread_id,
+                history_mode: ThreadHistoryMode::PanngV1,
+                thread_store,
+                metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+                persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
+            },
+            recovered,
+        ))
+    }
+
+    pub async fn experimental_panng_append(
+        &self,
+        commit: codex_rollout::PanngCommit,
+    ) -> ThreadStoreResult<crate::DurableRecordPosition> {
+        let receipt = self
+            .thread_store
+            .experimental_panng_append(self.thread_id, commit.clone())
+            .await?;
+        self.observe_panng_metadata(commit).await;
+        Ok(receipt)
+    }
+    pub async fn experimental_panng_reconcile(
+        &self,
+        commit: codex_rollout::PanngCommit,
+    ) -> ThreadStoreResult<crate::ExperimentalPanngReconcile> {
+        let outcome = self
+            .thread_store
+            .experimental_panng_reconcile(self.thread_id, commit.clone())
+            .await?;
+        if matches!(outcome, crate::ExperimentalPanngReconcile::Durable(_)) {
+            self.observe_panng_metadata(commit).await;
+        }
+        Ok(outcome)
+    }
+    pub async fn experimental_panng_read(
+        &self,
+    ) -> ThreadStoreResult<codex_rollout::RecoveredPanngSuffix> {
+        self.thread_store
+            .experimental_panng_read(self.thread_id)
+            .await
+    }
+    async fn observe_panng_metadata(&self, commit: codex_rollout::PanngCommit) {
+        let _ = self
+            .metadata_sync
+            .lock()
+            .await
+            .observe_appended_items(&[RolloutItem::PanngCommit(Box::new(commit))]);
+        // Metadata is a rebuildable projection; it must not invalidate the canonical ACK.
+        if let Err(error) = self.flush_pending_metadata_update().await {
+            warn!("Panng canonical commit succeeded but metadata projection failed: {error}");
+        }
+    }
+
     /// Create a child thread with inherited model context already durable.
     ///
     /// The boundary belongs in session metadata before the copied prefix is written so history

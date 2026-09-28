@@ -1008,7 +1008,9 @@ impl App {
                     .thread_read(thread_id, /*include_turns*/ false)
                     .await?;
                 let turns = match thread.history_mode {
-                    ThreadHistoryMode::Paginated if app_server.supports_paginated_history() => {
+                    ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1
+                        if app_server.supports_paginated_history() =>
+                    {
                         app_server
                             .thread_turns_page(
                                 thread_id,
@@ -1017,6 +1019,11 @@ impl App {
                             )
                             .await?
                             .data
+                    }
+                    ThreadHistoryMode::PanngV1 => {
+                        return Err(color_eyre::eyre::eyre!(
+                            "Panng history requires paginated server support"
+                        ));
                     }
                     ThreadHistoryMode::Legacy | ThreadHistoryMode::Paginated => {
                         app_server

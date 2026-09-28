@@ -33,6 +33,7 @@ pub(super) fn record_spawn_success(
     let history_mode = match measurements.history_mode {
         ThreadHistoryMode::Legacy => "legacy",
         ThreadHistoryMode::Paginated => "paginated",
+        ThreadHistoryMode::PanngV1 => "panng_v1",
     };
     let multi_agent_version = match multi_agent_version {
         MultiAgentVersion::Disabled => "disabled",

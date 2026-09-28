@@ -17,6 +17,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 
 mod error_metrics;
+mod format;
 mod read_metrics;
 
 use error_metrics::FailureMetric;
@@ -713,6 +714,7 @@ mod worker {
         SkippedBusy,
         SkippedChanged,
         SkippedAlreadyCompressed,
+        SkippedUnsupportedFormat,
     }
 
     impl CompressionOutcome {
@@ -723,6 +725,7 @@ mod worker {
                 CompressionOutcome::SkippedBusy => "skipped_busy",
                 CompressionOutcome::SkippedChanged => "skipped_changed",
                 CompressionOutcome::SkippedAlreadyCompressed => "skipped_already_compressed",
+                CompressionOutcome::SkippedUnsupportedFormat => "skipped_unsupported_format",
             }
         }
     }
@@ -780,7 +783,8 @@ mod worker {
                     CompressionOutcome::SkippedNotCold
                     | CompressionOutcome::SkippedBusy
                     | CompressionOutcome::SkippedChanged
-                    | CompressionOutcome::SkippedAlreadyCompressed => {
+                    | CompressionOutcome::SkippedAlreadyCompressed
+                    | CompressionOutcome::SkippedUnsupportedFormat => {
                         stats.skipped = stats.skipped.saturating_add(1);
                     }
                 }
@@ -834,6 +838,15 @@ mod worker {
             }
         };
         let source_bytes = Some(before.len);
+        if !super::format::is_native_compression_source(path)
+            .inspect_err(|err| FailureMetric::File(trigger).record("read_format", err))?
+        {
+            return Ok(CompressionMeasurement::new(
+                CompressionOutcome::SkippedUnsupportedFormat,
+                source_bytes,
+                /*compressed_bytes*/ None,
+            ));
+        }
         let compressed_path = path::compressed_rollout_path(path);
         if compressed_path.exists() {
             return Ok(CompressionMeasurement::new(
@@ -900,6 +913,17 @@ mod worker {
         {
             return Ok(CompressionMeasurement::new(
                 CompressionOutcome::SkippedChanged,
+                source_bytes,
+                /*compressed_bytes*/ None,
+            ));
+        }
+
+        // Recheck the discriminator under publication coordination, not only before encoding.
+        if !super::format::is_native_compression_source(path)
+            .inspect_err(|err| FailureMetric::File(trigger).record("recheck_format", err))?
+        {
+            return Ok(CompressionMeasurement::new(
+                CompressionOutcome::SkippedUnsupportedFormat,
                 source_bytes,
                 /*compressed_bytes*/ None,
             ));

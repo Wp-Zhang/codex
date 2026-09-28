@@ -423,6 +423,22 @@ impl ThreadHistoryBuilder {
         self.current_rollout_index = self.next_rollout_index;
         self.next_rollout_index += 1;
         match item {
+            RolloutItem::PanngCommit(commit) => {
+                // Canonical item events own presentation. Checkpoint replacement messages
+                // and raw model responses must not synthesize duplicate UI items or cuts.
+                // Strict storage admission/materialization validates projection cardinality.
+                for effect in commit.host_effects() {
+                    if let RolloutItem::EventMsg(
+                        event @ (EventMsg::TurnStarted(_)
+                        | EventMsg::TurnComplete(_)
+                        | EventMsg::TurnAborted(_)
+                        | EventMsg::ItemCompleted(_)),
+                    ) = effect
+                    {
+                        self.handle_event(event);
+                    }
+                }
+            }
             RolloutItem::EventMsg(event) => self.handle_event(event),
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
             RolloutItem::ResponseItem(item) => self.handle_response_item(&item.item),

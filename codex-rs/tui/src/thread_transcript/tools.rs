@@ -125,6 +125,8 @@ pub(crate) struct CommandHistory {
     pub(crate) aggregated_output: String,
     pub(crate) exit_code: i32,
     pub(crate) duration: Duration,
+    unconfirmed: bool,
+    reported_duration: Option<Duration>,
 }
 
 impl CommandHistory {
@@ -147,6 +149,9 @@ impl CommandHistory {
         if source == CommandExecutionSource::UnifiedExecInteraction {
             return None;
         }
+        let unconfirmed = status == CommandExecutionStatus::Failed && exit_code.is_none();
+        let reported_duration =
+            duration_ms.map(|millis| Duration::from_millis(millis.max(0) as u64));
         let exit_code = match status {
             CommandExecutionStatus::InProgress | CommandExecutionStatus::Declined => return None,
             CommandExecutionStatus::Completed => exit_code.unwrap_or_default(),
@@ -164,12 +169,19 @@ impl CommandHistory {
             source,
             aggregated_output: aggregated_output.unwrap_or_default(),
             exit_code,
+            unconfirmed,
+            reported_duration,
             duration: Duration::from_millis(duration_ms.unwrap_or_default().max(/*other*/ 0) as u64),
         })
     }
 
     pub(crate) fn into_cell(self) -> ExecCell {
         let output = CommandOutput::new(self.exit_code, self.aggregated_output);
+        let output = if self.unconfirmed {
+            output.with_unconfirmed_exit(self.reported_duration)
+        } else {
+            output
+        };
         let mut cell = new_active_exec_command(
             self.id.clone(),
             self.command,

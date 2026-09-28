@@ -1,3 +1,6 @@
+#[path = "panng_resume_gate.rs"]
+mod panng_resume_gate;
+
 #[path = "daemon_continuation.rs"]
 mod daemon_continuation;
 
@@ -2933,7 +2936,7 @@ impl ThreadRequestProcessor {
             else {
                 return Ok(None);
             };
-            if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
+            if panng_resume_gate::uses_projected_history(stored_thread.history_mode) {
                 let (mut thread, _) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
                 thread.turns = self
@@ -3038,6 +3041,7 @@ impl ThreadRequestProcessor {
             if matches!(
                 thread.history_mode,
                 codex_app_server_protocol::ThreadHistoryMode::Paginated
+                    | codex_app_server_protocol::ThreadHistoryMode::PanngV1
             ) {
                 self.thread_store
                     .persist_thread(thread_id, PersistContext::Standard)
@@ -3081,7 +3085,7 @@ impl ThreadRequestProcessor {
             })
             .await
         {
-            Ok(thread) if thread.history_mode == ThreadHistoryMode::Paginated => {
+            Ok(thread) if panng_resume_gate::uses_projected_history(thread.history_mode) => {
                 return self
                     .paginated_thread_turns_list_response(
                         thread_uuid,
@@ -3751,7 +3755,8 @@ impl ThreadRequestProcessor {
             )));
         }
         let paginated_thread_id = resume_source_thread.as_ref().and_then(|thread| {
-            matches!(thread.history_mode, ThreadHistoryMode::Paginated).then_some(thread.thread_id)
+            panng_resume_gate::uses_projected_history(thread.history_mode)
+                .then_some(thread.thread_id)
         });
         let paginated_resume = paginated_thread_id.is_some();
         if paginated_resume
@@ -4096,7 +4101,7 @@ impl ThreadRequestProcessor {
                 );
                 let config_snapshot = codex_thread.config_snapshot().await;
                 let (turns_backwards_cursor, items_backwards_cursor) =
-                    if matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated) {
+                    if panng_resume_gate::uses_projected_history(config_snapshot.history_mode) {
                         match Self::paginated_resume_backwards_cursors(
                             self.thread_store.as_ref(),
                             thread_id,
@@ -4308,7 +4313,7 @@ impl ThreadRequestProcessor {
 
         if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
             let paginated_resume =
-                matches!(source_thread.history_mode, ThreadHistoryMode::Paginated);
+                panng_resume_gate::uses_projected_history(source_thread.history_mode);
             let existing_thread_rollout_path = existing_thread.rollout_path();
             let active_path = existing_thread_rollout_path
                 .as_ref()
@@ -4565,7 +4570,10 @@ impl ThreadRequestProcessor {
         &self,
         stored_thread: StoredThread,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
-        if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
+        if matches!(
+            stored_thread.history_mode,
+            ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1
+        ) {
             let model_context = self
                 .thread_store
                 .load_latest_model_context(StoreLoadThreadHistoryParams {
@@ -4628,7 +4636,7 @@ impl ThreadRequestProcessor {
 
         let stored_thread = result.map_err(thread_store_resume_read_error)?;
         if let Some(requested_path) = path
-            && matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated)
+            && panng_resume_gate::uses_projected_history(stored_thread.history_mode)
         {
             let current_thread = self
                 .thread_store
@@ -4887,7 +4895,10 @@ impl ThreadRequestProcessor {
                 /*include_history*/ false,
             )
             .await?;
-        let paginated_source = matches!(source_thread.history_mode, ThreadHistoryMode::Paginated);
+        let paginated_source = matches!(
+            source_thread.history_mode,
+            ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1
+        );
         if last_turn_id.is_some() && before_turn_id.is_some() {
             return Err(invalid_request(
                 "`beforeTurnId` cannot be combined with `lastTurnId`",

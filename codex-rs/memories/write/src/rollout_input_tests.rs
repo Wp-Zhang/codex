@@ -54,3 +54,17 @@ fn classifies_memory_excluded_fragments() {
         );
     }
 }
+
+#[test]
+fn panng_memory_input_cannot_silently_discard_atomic_runtime_records() {
+    let commit = codex_rollout::PanngCommit::from_slice(
+        br#"{
+        "version":1,"branch":"00000000-0000-4000-8000-000000000001",
+        "commit_id":"00000000-0000-4000-8000-000000000002","sequence":1,"previous_sequence":0,
+        "mutation":{"Delta":{"changes":[]}},"host_effects":[],"checkpoint":null
+    }"#,
+    )
+    .unwrap();
+    let items = vec![RolloutItem::PanngCommit(Box::new(commit))];
+    assert!(serialize_tiered_input(&items, /*token_limit*/ 1000).is_err());
+}

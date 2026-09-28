@@ -344,7 +344,7 @@ impl AppServerSession {
             .await?;
         thread.turns = page.data.into_iter().rev().collect();
         let mut state = ThreadHistoryPagination {
-            history_mode: ThreadHistoryMode::Paginated,
+            history_mode: thread.history_mode,
             next_turn_cursor: page.next_cursor,
             next_item_cursor: item_cursor,
             ..ThreadHistoryPagination::default()

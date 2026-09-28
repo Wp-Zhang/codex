@@ -373,7 +373,7 @@ pub(super) fn stored_thread_from_state_metadata(
     parent_thread_id: Option<codex_protocol::ThreadId>,
 ) -> StoredThread {
     let name = match metadata.history_mode {
-        ThreadHistoryMode::Paginated => sqlite_thread_name(&metadata),
+        ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1 => sqlite_thread_name(&metadata),
         ThreadHistoryMode::Legacy => distinct_thread_metadata_title(&metadata),
     };
     let rollout_path = codex_rollout::plain_rollout_path(metadata.rollout_path.as_path());
@@ -436,7 +436,7 @@ async fn thread_name_from_metadata(
     history_mode: ThreadHistoryMode,
 ) -> Option<String> {
     match history_mode {
-        ThreadHistoryMode::Paginated => sqlite_thread_name(metadata),
+        ThreadHistoryMode::Paginated | ThreadHistoryMode::PanngV1 => sqlite_thread_name(metadata),
         ThreadHistoryMode::Legacy => {
             let title = distinct_thread_metadata_title(metadata);
             if title.is_some() && !has_guardian_default_title(metadata) {

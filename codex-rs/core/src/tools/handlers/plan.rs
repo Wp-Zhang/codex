@@ -72,6 +72,7 @@ impl PlanHandler {
             turn,
             call_id: _,
             payload,
+            step_context,
             ..
         } = invocation;
 
@@ -91,9 +92,20 @@ impl PlanHandler {
         }
 
         let args = parse_update_plan_arguments(&arguments)?;
-        session
-            .send_event(turn.as_ref(), EventMsg::PlanUpdate(args))
-            .await;
+        if turn.history_mode == codex_protocol::protocol::ThreadHistoryMode::PanngV1 {
+            session
+                .commit_panng_control_effect(
+                    &turn,
+                    &step_context.settings.model_info,
+                    codex_history::RolloutItem::EventMsg(EventMsg::PlanUpdate(args)),
+                )
+                .await
+                .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
+        } else {
+            session
+                .send_event(turn.as_ref(), EventMsg::PlanUpdate(args))
+                .await;
+        }
 
         Ok(boxed_tool_output(PlanToolOutput))
     }

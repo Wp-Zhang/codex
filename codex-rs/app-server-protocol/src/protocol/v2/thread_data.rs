@@ -79,6 +79,9 @@ pub enum ThreadHistoryMode {
     #[default]
     Legacy,
     Paginated,
+    #[serde(rename = "panngV1")]
+    #[ts(rename = "panngV1")]
+    PanngV1,
 }
 
 impl From<CoreThreadHistoryMode> for ThreadHistoryMode {
@@ -86,6 +89,7 @@ impl From<CoreThreadHistoryMode> for ThreadHistoryMode {
         match value {
             CoreThreadHistoryMode::Legacy => Self::Legacy,
             CoreThreadHistoryMode::Paginated => Self::Paginated,
+            CoreThreadHistoryMode::PanngV1 => Self::PanngV1,
         }
     }
 }
@@ -95,6 +99,7 @@ impl From<ThreadHistoryMode> for CoreThreadHistoryMode {
         match value {
             ThreadHistoryMode::Legacy => Self::Legacy,
             ThreadHistoryMode::Paginated => Self::Paginated,
+            ThreadHistoryMode::PanngV1 => Self::PanngV1,
         }
     }
 }

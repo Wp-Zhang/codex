@@ -69,14 +69,25 @@ fn snapshot(sequence: u64, state: RuntimeSnapshot) -> PanngCommit {
     commit(sequence, RuntimeMutation::snapshot(state, reason).unwrap())
 }
 fn header() -> Vec<u8> {
-    let mut bytes = serde_json::to_vec(&json!({
-        "type":"session_meta", "timestamp":"2026-09-28T00:00:00Z", "ordinal":0,
-        "payload": { "id":id(9), "history_mode":"panng_v1", "panng":{"version":1,"branch":id(1)} }
-    }))
-    .unwrap();
-    bytes.push(b'\n');
-    bytes
+    let thread_id = ThreadId::from_string(&id(9)).unwrap();
+    let meta = codex_protocol::protocol::SessionMetaLine {
+        meta: codex_protocol::protocol::SessionMeta {
+            id: thread_id,
+            session_id: thread_id.into(),
+            timestamp: "2026-09-28T00:00:00Z".into(),
+            source: codex_protocol::protocol::SessionSource::Exec,
+            history_mode: codex_protocol::protocol::ThreadHistoryMode::PanngV1,
+            cwd: std::env::current_dir().unwrap(),
+            ..Default::default()
+        },
+        git: None,
+    };
+    codex_history::PanngSessionHeader::new(meta, branch())
+        .unwrap()
+        .as_bytes()
+        .to_vec()
 }
+
 fn line(commit: &PanngCommit, ordinal: u64) -> Vec<u8> {
     let mut bytes = serde_json::to_vec(&json!({
         "type":"panng_commit", "timestamp":"2026-09-28T00:00:00Z", "ordinal":ordinal, "payload":commit
@@ -444,3 +455,11 @@ async fn actual_file_lock_rejects_two_namespaces_for_the_same_inode() {
 #[cfg(unix)]
 #[path = "strict_fault_tests.rs"]
 mod faults;
+
+#[cfg(unix)]
+#[path = "strict_native_boundary_tests.rs"]
+mod native_boundaries;
+
+#[cfg(unix)]
+#[path = "strict_position_tests.rs"]
+mod durable_position;

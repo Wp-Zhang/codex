@@ -238,3 +238,26 @@ fn acknowledging_an_older_checkpoint_does_not_clear_newer_changes() {
     assert_eq!(recorder.checkpoint(/*force*/ false), None);
     assert!(recorder.checkpoint(/*force*/ true).is_some());
 }
+
+#[test]
+fn restores_panng_attribution_without_losing_envelope_metadata() {
+    let expected = McpAttribution {
+        status: McpAttributionStatus::Complete,
+        error_reason: None,
+        sources: vec![source("search", "turn_1")],
+    };
+    let effect = RolloutItem::ResponseItem(envelope(Some(expected.clone())));
+    let commit: RolloutItem = serde_json::from_value(serde_json::json!({
+        "type":"panng_commit", "payload": {
+            "version":1,"branch":"00000000-0000-4000-8000-000000000001",
+            "commit_id":"00000000-0000-4000-8000-000000000002",
+            "sequence":1,"previous_sequence":0,"mutation":{"Delta":{"changes":[]}},
+            "host_effects":[effect],"checkpoint":null
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        McpAttributionRecorder::new(&InitialHistory::Forked(vec![commit])).snapshot(),
+        expected
+    );
+}

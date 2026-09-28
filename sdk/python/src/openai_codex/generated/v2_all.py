@@ -5272,6 +5272,7 @@ class ThreadGoalStatus(Enum):
 class ThreadHistoryMode(Enum):
     legacy = "legacy"
     paginated = "paginated"
+    panng_v1 = "panngV1"
 
 
 class ThreadId(RootModel[str]):

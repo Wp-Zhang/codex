@@ -779,6 +779,10 @@ pub enum ThreadHistoryMode {
     #[default]
     Legacy,
     Paginated,
+    /// Atomic host/runtime commits; requires the strict Panng journal reader and writer.
+    #[serde(rename = "panng_v1")]
+    #[ts(rename = "panng_v1")]
+    PanngV1,
 }
 
 impl ThreadHistoryMode {
@@ -786,6 +790,7 @@ impl ThreadHistoryMode {
         match self {
             Self::Legacy => "legacy",
             Self::Paginated => "paginated",
+            Self::PanngV1 => "panng_v1",
         }
     }
 }
@@ -797,6 +802,7 @@ impl FromStr for ThreadHistoryMode {
         match value {
             "legacy" => Ok(Self::Legacy),
             "paginated" => Ok(Self::Paginated),
+            "panng_v1" => Ok(Self::PanngV1),
             _ => Err(format!("unknown thread history mode `{value}`")),
         }
     }

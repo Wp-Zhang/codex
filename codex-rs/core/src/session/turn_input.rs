@@ -137,7 +137,12 @@ impl PreparedTurnInputSettings {
             cyber_access_program,
         } = self.start_options;
         let emit_thread_settings_applied = self.thread_settings_update.is_some();
-        let _settings_guard = if emit_thread_settings_applied {
+        let panng = session
+            .services
+            .thread_extension_data
+            .get::<super::panng_bootstrap::Bootstrap>()
+            .is_some();
+        let _settings_guard = if emit_thread_settings_applied && !panng {
             Some(thread_settings::acquire_persistence_lock(session).await)
         } else {
             None
@@ -175,7 +180,13 @@ impl PreparedTurnInputSettings {
                 .set_turn_trigger(turn_trigger);
         }
         if emit_thread_settings_applied {
-            thread_settings::emit_applied(session, submission_id, settings_snapshot).await;
+            if panng {
+                session
+                    .emit_panng_settings_applied(submission_id, settings_snapshot)
+                    .await;
+            } else {
+                thread_settings::emit_applied(session, submission_id, settings_snapshot).await;
+            }
         }
         if let Some(parent_turn_id) = parent_turn_id {
             turn_context
@@ -196,6 +207,22 @@ impl PreparedTurnInputSettings {
         let Some(thread_settings_update) = self.thread_settings_update else {
             return Ok(());
         };
+        if session
+            .services
+            .thread_extension_data
+            .get::<super::panng_bootstrap::Bootstrap>()
+            .is_some()
+        {
+            if let Some(commit) = session
+                .update_panng_settings_if(thread_settings_update, |_, _| true)
+                .await?
+            {
+                session
+                    .emit_panng_settings_applied(submission_id, commit.snapshot)
+                    .await;
+            }
+            return Ok(());
+        }
         thread_settings::apply_update(session, submission_id, thread_settings_update)
             .await
             .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
@@ -208,6 +235,28 @@ pub(super) async fn handle(
     mode: TurnInputMode,
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
+    let mode = if session
+        .services
+        .thread_extension_data
+        .get::<super::panng_bootstrap::Bootstrap>()
+        .is_some()
+    {
+        super::panng_public_admission::validate(session, &request, &mode).await?;
+        if matches!(mode, TurnInputMode::StartOrSteer) {
+            let active = session.active_turn.lock().await;
+            if let Some(task) = active.as_ref().and_then(|turn| turn.task.as_ref()) {
+                TurnInputMode::Steer {
+                    expected_turn_id: task.turn_context.sub_id.clone(),
+                }
+            } else {
+                TurnInputMode::StartIfIdle
+            }
+        } else {
+            mode
+        }
+    } else {
+        mode
+    };
     match mode {
         TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
         TurnInputMode::StartIfIdle => {
@@ -701,7 +750,13 @@ impl Session {
                     content: std::mem::take(content),
                     client_id: client_id.clone(),
                     metadata: super::UserInputMetadata {
-                        acceptance_order: Some(self.reserve_user_input_order().await),
+                        acceptance_order: if active_task.turn_context.history_mode
+                            == codex_protocol::protocol::ThreadHistoryMode::PanngV1
+                        {
+                            None
+                        } else {
+                            Some(self.reserve_user_input_order().await)
+                        },
                         origin,
                     },
                 }
@@ -723,6 +778,14 @@ async fn merge_additional_context_input(
     session: &Session,
     additional_context: BTreeMap<String, AdditionalContextEntry>,
 ) -> Vec<TurnInput> {
+    if session
+        .services
+        .thread_extension_data
+        .get::<super::panng_bootstrap::Bootstrap>()
+        .is_some()
+    {
+        return vec![TurnInput::AdditionalContext(additional_context)];
+    }
     let additional_context_input = {
         let mut state = session.state.lock().await;
         state.additional_context.merge(additional_context)
@@ -745,7 +808,16 @@ async fn pending_turn_input(
             content,
             client_id,
             metadata: super::UserInputMetadata {
-                acceptance_order: Some(session.reserve_user_input_order().await),
+                acceptance_order: if session
+                    .services
+                    .thread_extension_data
+                    .get::<super::panng_bootstrap::Bootstrap>()
+                    .is_some()
+                {
+                    None // The durable history candidate allocates this order before its ACK.
+                } else {
+                    Some(session.reserve_user_input_order().await)
+                },
                 origin,
             },
         },

@@ -228,7 +228,10 @@ pub(super) async fn shutdown_thread(
     let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     let (recorder, rollout_id, history_mode) = live_writer_parts(store, thread_id).await?;
     let rollout_path = recorder.rollout_path().to_path_buf();
-    if matches!(history_mode, ThreadHistoryMode::Legacy) {
+    if matches!(
+        history_mode,
+        ThreadHistoryMode::Legacy | ThreadHistoryMode::PanngV1
+    ) {
         recorder.shutdown().await.map_err(thread_store_io_error)?;
     } else {
         recorder.shutdown().await.map_err(thread_store_io_error)?;
@@ -388,6 +391,17 @@ async fn write_and_project(
     // teardown.
     let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     let (recorder, rollout_id, history_mode) = live_writer_parts(store, thread_id).await?;
+    if history_mode == ThreadHistoryMode::PanngV1 {
+        // Canonical Panng commits use the strict bridge. Native materialization may skip errors
+        // and is never a valid projection path for a marked journal.
+        return match write_op {
+            RolloutWriteOp::AppendItems(_) => Err(ThreadStoreError::Unsupported {
+                operation: "native_append_to_panng",
+            }),
+            RolloutWriteOp::Persist => recorder.persist().await.map_err(thread_store_io_error),
+            RolloutWriteOp::Flush => recorder.flush().await.map_err(thread_store_io_error),
+        };
+    }
     let sync_rollout_path = matches!(&write_op, RolloutWriteOp::Persist | RolloutWriteOp::Flush);
     let write_op = match write_op {
         RolloutWriteOp::AppendItems(mut items) => {

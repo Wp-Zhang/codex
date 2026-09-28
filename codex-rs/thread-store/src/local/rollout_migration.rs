@@ -1153,6 +1153,7 @@ impl LocalThreadStore {
                 .timestamp_millis();
             let is_inherited_subagent_history =
                 subagent_history_start_ordinal.is_some_and(|start| ordinal < start);
+            let projected = project_rollout_line(&line).map_err(migration_error)?;
             batch.push(RolloutProjectionStep::Line(Box::new(
                 ProjectedRolloutLine {
                     ordinal,
@@ -1162,7 +1163,7 @@ impl LocalThreadStore {
                     changes: if is_inherited_subagent_history {
                         Default::default()
                     } else {
-                        project_rollout_line(&line)
+                        projected
                     },
                     realtime_item: match line.item {
                         RolloutItem::RealtimeItem(item) if !is_inherited_subagent_history => {

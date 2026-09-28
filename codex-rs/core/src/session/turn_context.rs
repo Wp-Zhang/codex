@@ -1071,21 +1071,33 @@ impl Session {
         should_start: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> CodexResult<Option<(Arc<TurnContext>, ThreadSettingsSnapshot)>> {
         let service_tier_for_turn = updates.service_tier_for_turn.clone();
-        let commit = match self.update_settings_if(updates, should_start).await {
-            Ok(Some(commit)) => commit,
-            Ok(None) => return Ok(None),
-            Err(error) => {
-                let message = CodexErr::InvalidRequest(error.to_string()).to_string();
-                self.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        misalignment: None,
-                        message: message.clone(),
-                        codex_error_info: Some(CodexErrorInfo::BadRequest),
-                    }),
-                })
-                .await;
-                return Err(CodexErr::InvalidRequest(message));
+        let commit = if self
+            .services
+            .thread_extension_data
+            .get::<super::panng_bootstrap::Bootstrap>()
+            .is_some()
+        {
+            let Some(commit) = self.update_panng_settings_if(updates, should_start).await? else {
+                return Ok(None);
+            };
+            commit
+        } else {
+            match self.update_settings_if(updates, should_start).await {
+                Ok(Some(commit)) => commit,
+                Ok(None) => return Ok(None),
+                Err(error) => {
+                    let message = CodexErr::InvalidRequest(error.to_string()).to_string();
+                    self.send_event_raw(Event {
+                        id: sub_id,
+                        msg: EventMsg::Error(ErrorEvent {
+                            misalignment: None,
+                            message: message.clone(),
+                            codex_error_info: Some(CodexErrorInfo::BadRequest),
+                        }),
+                    })
+                    .await;
+                    return Err(CodexErr::InvalidRequest(message));
+                }
             }
         };
         let mut configuration = commit.configuration;

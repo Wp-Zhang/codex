@@ -293,6 +293,27 @@ impl OperationRecord {
         };
         Ok(next)
     }
+    /// Resolve inherited work only as an unknown notification; this never authorizes execution.
+    pub fn inherited_in_context(
+        &self,
+        result_id: ResultId,
+        delivery_commit: CommitId,
+    ) -> Result<Self, JournalError> {
+        if self.state != OperationState::InheritedUnknown {
+            return Err(JournalError(
+                "only inherited unknown work may use fork delivery",
+            ));
+        }
+        let mut next = self.clone();
+        next.state = OperationState::InContext {
+            result_id,
+            delivery_commit,
+            outcome: ExecutionOutcome::Indeterminate,
+            result: StoredResult::unknown(UnknownResultReason::ExecutorDisconnected),
+        };
+        Ok(next)
+    }
+
     pub(crate) fn inherited(&self) -> Self {
         let mut next = self.clone();
         if next.state == OperationState::Prepared {
@@ -306,6 +327,14 @@ impl OperationRecord {
         }
         match (&previous.state, &self.state) {
             (OperationState::Prepared, OperationState::Ready { .. }) => true,
+            (
+                OperationState::InheritedUnknown,
+                OperationState::InContext {
+                    outcome: ExecutionOutcome::Indeterminate,
+                    result,
+                    ..
+                },
+            ) if result.unknown_reason() == Some(UnknownResultReason::ExecutorDisconnected) => true,
             (
                 OperationState::Ready {
                     result_id: a,

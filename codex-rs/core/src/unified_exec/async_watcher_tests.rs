@@ -103,7 +103,7 @@ async fn completed_output_preserves_bytes_before_subscription(
     start_streaming_output(&process, &context);
     #[allow(deprecated)]
     let cwd = context.step_context.turn.cwd.clone().into();
-    spawn_exit_watcher(
+    let watcher = spawn_exit_watcher(
         Arc::clone(&process),
         &context,
         vec!["proof".to_string()],
@@ -119,6 +119,7 @@ async fn completed_output_preserves_bytes_before_subscription(
     drop(stdout_tx);
     exit_tx.send(0).expect("send exit");
 
+    tokio::time::timeout(Duration::from_secs(2), watcher).await??;
     let item = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             if let EventMsg::ItemCompleted(completed) = rx_event.recv().await?.msg
@@ -319,7 +320,7 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
         mode: codex_protocol::openai_models::TruncationMode::Bytes,
         limit: 4,
     };
-    spawn_exit_watcher(
+    let watcher = spawn_exit_watcher(
         Arc::clone(&process),
         &context,
         vec!["proof".to_string()],
@@ -336,6 +337,7 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
     exit_tx.send(0).expect("send exit");
     drop(stdout_tx);
 
+    watcher.await.expect("terminal watcher joined");
     let event = rx_event.recv().await.expect("command end event");
     let elapsed = Instant::now().saturating_duration_since(exited_at);
     tokio::time::resume();
@@ -430,4 +432,60 @@ async fn streaming_output_bounds_invalid_bytes() {
             b"\xf0\x9f\x98\x80\xff\xff\xff".to_vec(),
         ]
     );
+}
+
+#[tokio::test]
+async fn one_shot_watcher_join_waits_for_terminal_observer() -> anyhow::Result<()> {
+    let StreamingOutputHarness {
+        process,
+        stdout_tx,
+        exit_tx,
+        output_buffer,
+        context,
+        rx_event,
+    } = streaming_output_harness().await?;
+    start_streaming_output(&process, &context);
+    let interaction = process.interaction_lock().lock_owned().await;
+    #[allow(deprecated)]
+    let cwd = context.step_context.turn.cwd.clone().into();
+    let mut watcher = spawn_exit_watcher(
+        Arc::clone(&process),
+        &context,
+        vec!["proof".into()],
+        cwd,
+        /*process_id*/ 123,
+        /*plugin_attribution*/ None,
+        output_buffer,
+        Instant::now(),
+        /*network_denial_monitor*/ None,
+        /*plugin_metrics_sidecar*/ None,
+    );
+    drop(stdout_tx);
+    exit_tx.send(0).expect("send exit");
+    process.cancellation_token().cancelled().await;
+    assert!(futures::poll!(&mut watcher).is_pending());
+    assert!(rx_event.try_recv().is_err());
+    drop(interaction);
+    tokio::time::timeout(Duration::from_secs(2), watcher).await??;
+    let events = std::iter::from_fn(|| rx_event.try_recv().ok()).collect::<Vec<_>>();
+    let completed = events
+        .iter()
+        .filter_map(|event| match &event.msg {
+            EventMsg::ItemCompleted(event) => Some(&event.item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(completed.len(), 1);
+    let TurnItem::CommandExecution(item) = completed[0] else {
+        panic!("command completion");
+    };
+    assert_eq!(
+        (
+            item.status,
+            item.exit_code,
+            item.aggregated_output.as_deref()
+        ),
+        (CommandExecutionStatus::Completed, Some(0), Some(""))
+    );
+    Ok(())
 }

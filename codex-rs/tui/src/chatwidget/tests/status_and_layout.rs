@@ -5429,6 +5429,10 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         ),
     );
     reveal_running_hooks(&mut chat);
+    // This test compares ownership/layout, not elapsed time or spinner phase.
+    chat.bottom_pane
+        .set_status_timer_origin(/*started_at*/ None);
+    chat.bottom_pane.reset_status_timer(Duration::ZERO);
     let exec_and_hook_running = hook_status_frame(&chat, /*width*/ 80);
 
     end_exec(&mut chat, begin, "done", "", /*exit_code*/ 0);
@@ -5436,6 +5440,9 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
+    chat.bottom_pane
+        .set_status_timer_origin(/*started_at*/ None);
+    chat.bottom_pane.reset_status_timer(Duration::ZERO);
     let hook_running_after_exec = hook_status_frame(&chat, /*width*/ 80);
 
     handle_hook_completed(
@@ -5448,6 +5455,9 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         ),
     );
     assert!(drain_insert_history(&mut rx).is_empty());
+    chat.bottom_pane
+        .set_status_timer_origin(/*started_at*/ None);
+    chat.bottom_pane.reset_status_timer(Duration::ZERO);
     let quiet_hook_completed = hook_status_frame(&chat, /*width*/ 80);
     expire_quiet_hook_linger(&mut chat);
     assert!(chat.active_hook_cell.is_none());

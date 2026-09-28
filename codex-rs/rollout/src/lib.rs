@@ -6,6 +6,7 @@ use codex_protocol::protocol::SessionSource;
 use serde::de::Error as _;
 use serde_json::Value;
 
+mod archived_result;
 pub(crate) mod compression;
 pub(crate) mod config;
 pub(crate) mod list;
@@ -13,10 +14,12 @@ mod maintenance;
 pub(crate) mod metadata;
 mod model_context;
 mod ordinal;
+mod panng_projection;
 mod panng_recovery;
 mod persistence_metrics;
 pub(crate) mod policy;
 pub(crate) mod recorder;
+mod result_blob;
 mod reverse_jsonl_scanner;
 mod rollout_file_name;
 mod rollout_reference_index;
@@ -113,6 +116,12 @@ pub async fn materialize_rollout_for_reference(
 ) -> std::io::Result<std::path::PathBuf> {
     compression::materialize_rollout_for_append(path, /*writer_lock*/ None).await
 }
+pub use archived_result::find_panng_operation;
+pub use codex_panng_runtime::BranchId;
+pub use codex_panng_runtime::OperationId;
+pub use codex_panng_runtime::OperationRecord;
+pub use codex_panng_runtime::ResultEncoding;
+pub use codex_panng_runtime::StoredResult;
 pub use config::Config;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;
@@ -142,8 +151,13 @@ pub use metadata::forked_from_ordinal_exclusive;
 pub use metadata::rollout_id_from_path;
 pub use model_context::ModelContextScan;
 pub use model_context::ModelContextScanProgress;
+pub use panng_projection::PanngProjectionBatch;
+pub use panng_projection::PanngProjectionReader;
+pub use panng_projection::PanngProjectionRecord;
+pub use panng_projection::PanngProjectionTarget;
 pub use panng_recovery::PanngReadCut;
 pub use panng_recovery::RecoveredPanngSuffix;
+pub use panng_recovery::read_panng_prefix;
 pub use panng_recovery::read_panng_suffix;
 pub use persistence_metrics::RolloutPersistenceBatchMeasurement;
 pub use persistence_metrics::RolloutPersistenceTelemetry;
@@ -152,6 +166,8 @@ pub use policy::is_persisted_rollout_item;
 pub use policy::persisted_rollout_items;
 pub use policy::should_persist_response_item;
 pub use policy::should_persist_response_item_for_memories;
+pub use recorder::PanngCreateError;
+pub use recorder::PanngCreatePlan;
 pub use recorder::ReconciledAppend;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
@@ -177,3 +193,12 @@ pub use writer_lock::WriterLockGuard;
 
 #[cfg(test)]
 mod tests;
+
+pub use codex_history::HostReplayItem;
+pub use codex_history::host_replay_items;
+
+pub use codex_history::PanngCommit;
+pub use codex_history::PanngSessionHeader;
+
+pub use result_blob::load_panng_result_blob;
+pub use result_blob::store_panng_result_blob;

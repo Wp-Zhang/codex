@@ -79,12 +79,25 @@ impl ToolCallRuntime {
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseItemEnvelope, CodexErr>> {
+        self.handle_tool_call_with_state(
+            call,
+            cancellation_token,
+            Arc::new(ToolCallState::default()),
+        )
+    }
+
+    /// Allows the durable caller to distinguish confirmed tool results from synthesized abort output.
+    pub(crate) fn handle_tool_call_with_state(
+        self,
+        call: ToolCall,
+        cancellation_token: CancellationToken,
+        call_state: Arc<ToolCallState>,
+    ) -> impl std::future::Future<Output = Result<ResponseItemEnvelope, CodexErr>> {
         let error_call = call.clone();
         let source = call.direct_source();
         let recorder = self.session.services.executed_tool_calls.clone();
         let recorded_call = recorder.prepare_direct_call(&call, &source, &self.step_context);
         let step_context = Arc::clone(&self.step_context);
-        let call_state = Arc::new(ToolCallState::default());
         let future = self.handle_tool_call_with_source(
             step_context,
             call,
@@ -141,9 +154,8 @@ impl ToolCallRuntime {
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&step_context.turn);
         let tracker = Arc::clone(&self.tracker);
-        // Only the admitted direct probe shares a cross-step gate. Native calls,
-        // including code-mode parents and children, keep their original local gates.
-        // This prototype does not establish global exclusion for mixed real tools.
+        // Direct durable tools share a gate across steps. Native calls and code-mode
+        // parents/children retain their local gates, avoiding recursive acquisition.
         let prototype = matches!(
             &source,
             ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage
@@ -151,8 +163,27 @@ impl ToolCallRuntime {
         .then(|| step_context.turn.extension_data.get::<crate::panng::Pool>())
         .flatten()
         .filter(|_| call.tool_name.is_default_namespace() && call.tool_name.name == "panng_probe");
-        let lock = prototype.map_or_else(
-            || Arc::clone(&self.parallel_execution),
+        let durable = step_context
+            .turn
+            .extension_data
+            .get::<crate::panng::execution::DurablePool>()
+            .filter(|_| {
+                matches!(
+                    &source,
+                    ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage
+                ) && call.tool_name.is_default_namespace()
+                    && matches!(
+                        call.tool_name.name.as_str(),
+                        "panng_probe" | "exec_command" | "apply_patch"
+                    )
+            });
+        let lock = durable.map_or_else(
+            || {
+                prototype.map_or_else(
+                    || Arc::clone(&self.parallel_execution),
+                    |pool| Arc::clone(&pool.execution_gate),
+                )
+            },
             |pool| Arc::clone(&pool.execution_gate),
         );
         let invocation_cancellation_token = cancellation_token.clone();
@@ -268,6 +299,14 @@ impl ToolCallRuntime {
                         match dispatch_handle.await {
                             Ok(result) => result,
                             Err(err) if err.is_cancelled() => {
+                                crate::unified_exec::UnifiedExecProcessManager::join_one_shot_cleanup(
+                                    &abort_turn,
+                                    &call.call_id,
+                                )
+                                .await
+                                .map_err(|error| FunctionCallError::Fatal(format!(
+                                    "failed to join finite command cleanup: {error}"
+                                )))?;
                                 let response = Self::aborted_response(&call, secs);
                                 call_trace::result_ready(
                                     thread_id,

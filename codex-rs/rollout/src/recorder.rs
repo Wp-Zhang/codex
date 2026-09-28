@@ -126,6 +126,10 @@ pub enum RolloutRecorderParams {
     },
 }
 
+mod prepare;
+mod strict_create;
+pub use strict_create::PanngCreateError;
+pub use strict_create::PanngCreatePlan;
 mod strict;
 pub use strict::ReconciledAppend;
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -137,6 +141,7 @@ enum RecorderMode {
 mod synced;
 pub use synced::SyncRecordError;
 pub use synced::SyncedRecord;
+pub(crate) use synced::sync_ancestors;
 
 enum RolloutCmd {
     AppendPanng {
@@ -146,6 +151,9 @@ enum RolloutCmd {
     ReconcilePanng {
         commit: Box<codex_history::PanngCommit>,
         ack: oneshot::Sender<Result<ReconciledAppend, SyncRecordError>>,
+    },
+    PanngDurablePosition {
+        ack: oneshot::Sender<std::io::Result<SyncedRecord>>,
     },
     AppendSynced {
         item: Box<RolloutItem>,
@@ -922,88 +930,20 @@ impl RolloutRecorder {
         // Clone the cwd for the spawned task to collect git info asynchronously.
         let cwd = config.cwd().to_path_buf();
         let state = match params {
-            RolloutRecorderParams::Create {
-                session_id,
-                conversation_id,
-                rollout_id_override,
-                forked_from_id,
-                forked_from_ordinal_exclusive,
-                parent_thread_id,
-                source,
-                thread_source,
-                originator,
-                creator_user_id,
-                creator_account_id,
-                base_instructions,
-                dynamic_tools,
-                selected_capability_roots,
-                runtime_workspace_roots,
-                multi_agent_version,
-                history_mode,
-                history_base,
-                subagent_history_start_ordinal,
-                initial_window_id,
-            } => {
-                let ordinal_state =
-                    RolloutOrdinalState::for_new_rollout(history_mode, history_base);
-                let (path, started_at) =
-                    precompute_new_rollout_path(config, conversation_id, rollout_id_override)?;
-
-                let timestamp_format: &[FormatItem] = format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-                );
-                let timestamp = started_at
-                    .to_offset(time::UtcOffset::UTC)
-                    .format(timestamp_format)
-                    .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
-
-                let session_meta = SessionMeta {
-                    session_id,
-                    id: conversation_id,
-                    forked_from_id,
-                    forked_from_ordinal_exclusive: forked_from_ordinal_exclusive
-                        .filter(|_| forked_from_id.is_some()),
-                    parent_thread_id,
-                    timestamp,
-                    cwd: cwd.clone(),
-                    runtime_workspace_roots,
-                    originator,
-                    creator_user_id,
-                    creator_account_id,
-                    cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                    agent_nickname: source.get_nickname(),
-                    agent_role: source.get_agent_role(),
-                    agent_path: source.get_agent_path().map(Into::into),
-                    source: *source,
-                    thread_source,
-                    model_provider: Some(config.model_provider_id().to_string()),
-                    base_instructions: Some(base_instructions),
-                    dynamic_tools: if dynamic_tools.is_empty() {
-                        None
-                    } else {
-                        Some(dynamic_tools)
-                    },
-                    selected_capability_roots,
-                    memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
-                    history_mode,
-                    history_base,
-                    subagent_history_start_ordinal,
-                    multi_agent_version,
-                    context_window: initial_window_id.map(SessionContextWindow::new),
-                };
-
-                RolloutWriterState {
-                    writer: None,
-                    deferred_creation: true,
-                    pending_items: Vec::new(),
-                    meta: Some(session_meta),
-                    cwd: cwd.clone(),
-                    rollout_path: path,
-                    ordinal_state,
-                    last_logged_error: None,
-                    synced: synced::SyncState::default(),
-                    strict: None,
+            params @ RolloutRecorderParams::Create { .. } => {
+                if matches!(
+                    &params,
+                    RolloutRecorderParams::Create {
+                        history_mode: ThreadHistoryMode::PanngV1,
+                        ..
+                    }
+                ) {
+                    return Err(IoError::new(
+                        std::io::ErrorKind::Unsupported,
+                        "Panng journals require strict initialization",
+                    ));
                 }
+                Self::prepare_create_state(config, params)?
             }
             RolloutRecorderParams::Resume { path } => {
                 let (path, file, ordinal_state) =
@@ -1074,6 +1014,15 @@ impl RolloutRecorder {
         if self.mode == RecorderMode::Strict {
             return Err(IoError::other(
                 "strict recorder requires identified Panng commits",
+            ));
+        }
+        if items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::PanngCommit(_)))
+        {
+            return Err(IoError::new(
+                std::io::ErrorKind::Unsupported,
+                "Panng commits require the identified strict writer API",
             ));
         }
         if items.is_empty() {
@@ -1153,6 +1102,20 @@ impl RolloutRecorder {
                     continue;
                 }
             };
+            if value.get("type").and_then(Value::as_str) == Some("panng_commit")
+                || (thread_id.is_none()
+                    && value.get("type").and_then(Value::as_str) == Some("session_meta")
+                    && value
+                        .get("payload")
+                        .and_then(|payload| payload.get("history_mode"))
+                        .and_then(Value::as_str)
+                        == Some("panng_v1"))
+            {
+                return Err(IoError::new(
+                    std::io::ErrorKind::Unsupported,
+                    "Panng history requires strict checkpoint recovery",
+                ));
+            }
             if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
                 trace!("skipping legacy ghost_snapshot rollout line");
                 continue;
@@ -2002,6 +1965,9 @@ async fn rollout_writer(
             RolloutCmd::ReconcilePanng { commit, ack } => {
                 let _ = ack.send(state.reconcile_panng(*commit).await);
             }
+            RolloutCmd::PanngDurablePosition { ack } => {
+                let _ = ack.send(state.panng_durable_position());
+            }
             RolloutCmd::AppendSynced { item, ack } => {
                 let _ = ack.send(state.append_synced(*item).await);
             }
@@ -2273,6 +2239,7 @@ async fn resume_candidate_matches_cwd(
             | RolloutItem::ResponseItem(_)
             | RolloutItem::InterAgentCommunication(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::PanngCommit(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::WorldState(_)
             | RolloutItem::RealtimeItem(_)

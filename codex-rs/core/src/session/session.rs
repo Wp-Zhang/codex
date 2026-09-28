@@ -842,6 +842,15 @@ impl Session {
             Some(ThreadSource::Subagent | ThreadSource::GuardianReview)
         );
         if let InitialHistory::Forked(items) = &mut initial_history {
+            if !matches!(
+                &fork_persistence,
+                ForkPersistence::Referenced {
+                    history_base: Some(_),
+                    ..
+                }
+            ) {
+                crate::panng::host_replay::reject_unsupported_fork(items)?;
+            }
             Self::assign_missing_rollout_response_item_ids(items);
         }
         let multi_agent_version = multi_agent_version.map(OnceLock::from).unwrap_or_default();
@@ -913,8 +922,9 @@ impl Session {
         });
         let initial_auto_compact_window_ids = AutoCompactWindowIds::new_initial();
         let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
-            && session_configuration.session_source.is_non_root_agent()
-            && config.features.enabled(Feature::TokenBudget);
+            && (session_configuration.history_mode == ThreadHistoryMode::PanngV1
+                || (session_configuration.session_source.is_non_root_agent()
+                    && config.features.enabled(Feature::TokenBudget)));
         if restore_child_window && let InitialHistory::Forked(items) = &mut initial_history {
             let child_window_id = initial_auto_compact_window_ids.window_id.to_string();
             for item in items {
@@ -977,6 +987,7 @@ impl Session {
         ));
         // Publish the already resolved model before extensions make startup decisions.
         // Turn construction refreshes this attachment when the selected model changes.
+        let initial_truncation_policy = model_info.truncation_policy;
         thread_extension_init.insert(model_info);
         let tool_policy = thread_extension_init
             .get::<codex_extension_api::ToolPolicy>()
@@ -1001,7 +1012,14 @@ impl Session {
         // - load history metadata (skipped for subagents)
         let persistence_auth = futures::FutureExt::shared(auth_manager.auth());
         let mcp_auth = persistence_auth.clone();
+        let panng_bootstrap =
+            Arc::new(OnceLock::<anyhow::Result<panng_bootstrap::Bootstrap>>::new());
+        let panng_fork_root = Arc::new(OnceLock::<codex_history::PanngCommit>::new());
         let thread_persistence_fut = async {
+            if config.ephemeral && session_configuration.history_mode == ThreadHistoryMode::PanngV1
+            {
+                anyhow::bail!("Panng bootstrap requires durable local persistence");
+            }
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None)))
             } else {
@@ -1052,7 +1070,56 @@ impl Session {
                                 },
                             },
                         };
-                        if is_paginated_subagent
+                        if session_configuration.history_mode == ThreadHistoryMode::PanngV1 {
+                            let initial = if let InitialHistory::Forked(source) = &initial_history {
+                                let cut = match &fork_persistence {
+                                    ForkPersistence::Referenced {
+                                        history_base: Some(cut),
+                                        ..
+                                    } => *cut,
+                                    _ => anyhow::bail!("Panng forks require a frozen parent cut"),
+                                };
+                                panng_fork::initial_fork_checkpoint(
+                                    thread_id,
+                                    initial_auto_compact_window_ids.window_id.to_string(),
+                                    &session_configuration,
+                                    source,
+                                    cut,
+                                    initial_truncation_policy,
+                                    initial_multi_agent_version,
+                                )?
+                            } else {
+                                panng_bootstrap::initial_checkpoint(
+                                    thread_id,
+                                    initial_auto_compact_window_ids.window_id.to_string(),
+                                    session_configuration
+                                        .thread_settings_snapshot(environment_selections),
+                                    initial_multi_agent_version,
+                                )?
+                            };
+                            let store = Arc::clone(&thread_store);
+                            let slot = Arc::clone(&panng_bootstrap);
+                            let fork_root = Arc::clone(&panng_fork_root);
+                            guard
+                                .acquire(async move {
+                                    let (live, receipt) = LiveThread::experimental_panng_create(
+                                        store,
+                                        params,
+                                        initial.clone(),
+                                    )
+                                    .await?;
+                                    if initial.mutation().snapshot_reason()
+                                        == Some(codex_panng_runtime::SnapshotReason::Fork)
+                                    {
+                                        let _ = fork_root.set(initial.clone());
+                                    }
+                                    let _ = slot.set(panng_bootstrap::Bootstrap::created(
+                                        &initial, receipt,
+                                    ));
+                                    Ok(live)
+                                })
+                                .await?
+                        } else if is_paginated_subagent
                             && matches!(
                                 &fork_persistence,
                                 ForkPersistence::Copied | ForkPersistence::CopiedDeferred
@@ -1088,13 +1155,57 @@ impl Session {
                                 },
                             },
                         };
-                        guard
-                            .acquire(LiveThread::resume(
-                                Arc::clone(&thread_store),
-                                session_configuration.history_mode,
-                                params,
-                            ))
-                            .await?
+                        if session_configuration.history_mode == ThreadHistoryMode::PanngV1 {
+                            let branch = resumed_history
+                                .history
+                                .iter()
+                                .find_map(|item| match item {
+                                    RolloutItem::PanngCommit(commit) => {
+                                        Some(commit.branch().clone())
+                                    }
+                                    _ => None,
+                                })
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "Panng resume lacks canonical runtime checkpoint"
+                                    )
+                                })?;
+                            let store = Arc::clone(&thread_store);
+                            let slot = Arc::clone(&panng_bootstrap);
+                            let live = guard
+                                .acquire(async move {
+                                    let (live, recovered) = LiveThread::experimental_panng_resume(
+                                        store, params, branch,
+                                    )
+                                    .await?;
+                                    let _ =
+                                        slot.set(panng_bootstrap::Bootstrap::resumed(recovered));
+                                    Ok(live)
+                                })
+                                .await?;
+                            panng_bootstrap
+                                .get()
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "Panng writer acquisition did not provide bootstrap state"
+                                    )
+                                })?
+                                .as_ref()
+                                .map_err(|error| {
+                                    anyhow::anyhow!("Panng recovery bootstrap failed: {error}")
+                                })?
+                                .validate_resume(&resumed_history.history)
+                                .await?;
+                            live
+                        } else {
+                            guard
+                                .acquire(LiveThread::resume(
+                                    Arc::clone(&thread_store),
+                                    session_configuration.history_mode,
+                                    params,
+                                ))
+                                .await?
+                        }
                     }
                 };
                 Ok((Some(live_thread), local_guard))
@@ -1183,6 +1294,21 @@ impl Session {
             error!("failed to initialize thread persistence: {e:#}");
             e
         })?;
+        // Keep acquisition success in the guard even if bootstrap validation fails.
+        let bootstrap = panng_bootstrap
+            .get()
+            .map(|result| {
+                result
+                    .as_ref()
+                    .map_err(|error| anyhow::anyhow!("Panng bootstrap failed: {error}"))
+            })
+            .transpose()?;
+        if session_configuration.history_mode == ThreadHistoryMode::PanngV1 && bootstrap.is_none() {
+            anyhow::bail!("Panng writer acquisition did not provide bootstrap state");
+        }
+        if let Some(bootstrap) = bootstrap {
+            thread_extension_data.insert(bootstrap.clone());
+        }
         let session_result: anyhow::Result<Arc<Self>> = async {
             let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?
@@ -1605,24 +1731,15 @@ impl Session {
                     )
                 })
             };
-            for item in initial_history.get_rollout_items() {
+            for item in codex_history::host_replay_items(initial_history.get_rollout_items()) {
                 match item {
-                    RolloutItem::Compacted(compacted) => {
+                    codex_history::HostReplayItem::Compacted(compacted) => {
                         if let Some(checkpoint) = &compacted.mcp_resource_origins {
                             mcp_runtime.restore_resource_origin_checkpoint(checkpoint);
                         }
                     }
-                    RolloutItem::EventMsg(event) => mcp_runtime.observe_event(event),
-                    RolloutItem::SessionMeta(_)
-                    | RolloutItem::ResponseItem(_)
-                    | RolloutItem::InterAgentCommunication(_)
-                    | RolloutItem::InterAgentCommunicationMetadata { .. }
-                    | RolloutItem::TurnContext(_)
-                    | RolloutItem::WorldState(_)
-                    | RolloutItem::RealtimeItem(_)
-                    | RolloutItem::TokenUsageRecord(_)
-                    | RolloutItem::RetainedContext(_)
-                    | RolloutItem::SecurityRiskScore(_) => {}
+                    codex_history::HostReplayItem::Item(RolloutItem::EventMsg(event)) => mcp_runtime.observe_event(event),
+                    codex_history::HostReplayItem::Item(_) => {}
                 }
             }
             let session_extension_data =
@@ -1794,7 +1911,13 @@ impl Session {
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(startup) = &startup {
+                // Cleanup ownership only: startup may still fail before the session is published.
                 let _ = startup.session.set(Arc::clone(&sess));
+            }
+            if let Some(bootstrap) = bootstrap {
+                // Rebuild the complete canonical host state before publishing SessionConfigured.
+                // Native initialization retains its existing event order.
+                bootstrap.finish(&sess, initial_history.get_rollout_items()).await?;
             }
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
@@ -1895,6 +2018,11 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
+            if let Some(root) = panng_fork_root.get() {
+                // Install the exact acknowledged checkpoint, including any normalized inherited
+                // interrupt marker; do not rebuild a second view from the parent's raw suffix.
+                initial_history = InitialHistory::Forked(vec![RolloutItem::PanngCommit(Box::new(root.clone()))]);
+            }
             Box::pin(sess.record_initial_history(initial_history)).await;
             if restore_child_window {
                 sess.state.lock().await.restore_auto_compact_window(

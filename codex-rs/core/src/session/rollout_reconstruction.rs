@@ -171,6 +171,24 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        Self::reconstruct_rollout_history(
+            &turn_context.session_source,
+            turn_context.history_mode,
+            turn_context.model_info().truncation_policy.into(),
+            rollout_items,
+        )
+    }
+
+    /// Pure replay shared by resume and pre-writer fork checkpoint construction.
+    pub(super) fn reconstruct_rollout_history(
+        session_source: &SessionSource,
+        history_mode: ThreadHistoryMode,
+        truncation_policy: codex_utils_output_truncation::TruncationPolicy,
+        rollout_items: &[RolloutItem],
+    ) -> RolloutReconstruction {
+        // Materialize only at this read boundary; InitialHistory retains canonical outer commits.
+        let replay = crate::panng::host_replay::reconstruction_items(rollout_items);
+        let rollout_items = replay.as_ref();
         // Select the compaction and suffix that can affect reconstruction.
         let has_legacy_compaction_without_window_number =
             rollout_items.iter().any(|item| {
@@ -188,7 +206,7 @@ impl Session {
                 _ => None,
             })
         };
-        let input_checkpoint = select_input_compaction(rollout_items, turn_context.history_mode);
+        let input_checkpoint = select_input_compaction(rollout_items, history_mode);
         let replay_items = input_checkpoint.map_or(rollout_items, |checkpoint| checkpoint.suffix);
         let resume_metadata =
             input_checkpoint.and_then(|checkpoint| checkpoint.compacted.resume_metadata.as_ref());
@@ -210,6 +228,7 @@ impl Session {
                 | RolloutItem::WorldState(_)
                 | RolloutItem::RetainedContext(_)
                 | RolloutItem::SecurityRiskScore(_)
+                | RolloutItem::PanngCommit(_)
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::RealtimeItem(_)
                 | RolloutItem::Compacted(_)
@@ -357,6 +376,7 @@ impl Session {
                 | RolloutItem::RealtimeItem(_)
                 | RolloutItem::RetainedContext(_)
                 | RolloutItem::SecurityRiskScore(_)
+                | RolloutItem::PanngCommit(_)
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
             }
@@ -393,7 +413,7 @@ impl Session {
         .unwrap_or(u64::MAX);
 
         // Build model-visible history from the selected compaction and its newer suffix.
-        let mut history = ContextManager::for_session(&turn_context.session_source);
+        let mut history = ContextManager::for_session(session_source);
         let mut saw_legacy_compaction_without_replacement_history = false;
         if let Some(checkpoint) = history_checkpoint
             && let Some(items) = &checkpoint.compacted.replacement_history
@@ -415,17 +435,11 @@ impl Session {
                     history.record_retained_context(event);
                 }
                 RolloutItem::ResponseItem(response_item) => {
-                    history.replay_annotated_item(
-                        response_item,
-                        turn_context.model_info().truncation_policy.into(),
-                    );
+                    history.replay_annotated_item(response_item, truncation_policy);
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();
-                    history.record_items(
-                        std::iter::once(&response_item),
-                        turn_context.model_info().truncation_policy.into(),
-                    );
+                    history.record_items(std::iter::once(&response_item), truncation_policy);
                 }
                 RolloutItem::InterAgentCommunicationMetadata { .. } => {}
                 RolloutItem::Compacted(compacted) => {
@@ -462,6 +476,7 @@ impl Session {
                 | RolloutItem::RealtimeItem(_)
                 | RolloutItem::WorldState(_)
                 | RolloutItem::SecurityRiskScore(_)
+                | RolloutItem::PanngCommit(_)
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::SessionMeta(_) => {}
             }
@@ -505,6 +520,7 @@ impl Session {
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::RetainedContext(_)
                 | RolloutItem::SecurityRiskScore(_)
+                | RolloutItem::PanngCommit(_)
                 | RolloutItem::EventMsg(_) => {
                     unreachable!("only world-state replay items are collected")
                 }
