@@ -12,6 +12,7 @@ members = [
     "ansi-escape",
     "attachment-store",
     "async-utils",
+    "panng-runtime",
     "app-server",
     "app-server-transport",
     "app-server-daemon",
@@ -187,6 +188,7 @@ codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
+codex-panng-runtime = { path = "panng-runtime" }
 codex-backend-client = { path = "backend-client" }
 codex-build-info = { path = "build-info" }
 codex-chatgpt = { path = "chatgpt" }

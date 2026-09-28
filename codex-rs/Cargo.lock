@@ -4192,6 +4192,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-panng-runtime"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-plugin"
 version = "0.0.0"
 dependencies = [
